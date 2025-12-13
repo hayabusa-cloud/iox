@@ -9,8 +9,10 @@ import "io"
 // Copy copies from src to dst until either EOF is reached on src or an error occurs.
 //
 // iox semantics extension:
-//   - ErrWouldBlock: return immediately (no progress now).
-//   - ErrMore: return immediately (progress happened; more will follow).
+//   - ErrWouldBlock: return immediately because the next step would block.
+//     written may be > 0 (partial progress); retry after readiness/completion.
+//   - ErrMore: return immediately because progress happened and the operation remains active;
+//     written may be > 0; keep polling for more completions.
 func Copy(dst Writer, src Reader) (written int64, err error) {
 	return copyBuffer(dst, src, nil)
 }
@@ -29,7 +31,8 @@ func CopyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 // On return, written == n if and only if err == nil.
 //
 // iox semantics extension:
-//   - ErrWouldBlock / ErrMore may be returned when progress stops early.
+//   - ErrWouldBlock / ErrMore may be returned when progress stops early;
+//     written may be > 0 and is the number of bytes already copied.
 func CopyN(dst Writer, src Reader, n int64) (written int64, err error) {
 	if n <= 0 {
 		return 0, nil
