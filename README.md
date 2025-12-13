@@ -1,2 +1,116 @@
 # iox
-Semantics extension of standard io package
+
+Non-blocking semantics for Go `io` package: first-class signals for would-block and multi-shot.
+
+[![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/iox.svg)](https://pkg.go.dev/code.hybscloud.com/iox)
+[![Go Report Card](https://goreportcard.com/badge/code.hybscloud.com/iox)](https://goreportcard.com/report/code.hybscloud.com/iox)
+[![Coverage Status](https://coveralls.io/repos/github/hayabusa-cloud/iox/badge.svg?branch=main)](https://coveralls.io/github/hayabusa-cloud/iox?branch=main)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+Language: **English** | [简体中文](./README.zh-CN.md) | [Español](./README.es.md) | [日本語](./README.ja.md) | [Français](./README.fr.md)
+
+## What this package is?
+
+`iox` is for non-blocking I/O stacks where “no progress right now” and “progress now, but the operation remains active” are **normal control flow**, not failures.
+
+It introduces two semantic errors with explicit contracts:
+
+- `ErrWouldBlock` — **no progress is possible now** without waiting for readiness/completions. Return immediately; retry after your next polling.
+- `ErrMore` — **progress happened** and the operation remains active; **more events will follow**. Process the current result and keep polling.
+
+`iox` keeps standard `io` mental models intact:
+
+- returned counts always mean “bytes transferred / progress made”
+- returned errors drive control flow (`nil`, semantic non-failure, or real failure)
+- helpers are compatible with `io.Reader`, `io.Writer`, and optimize via `io.WriterTo` / `io.ReaderFrom`
+
+## Semantics contract
+
+For operations that adopt `iox` semantics:
+
+| Return error | Meaning | What the caller must do next |
+|---|---|---|
+| `nil` | completed successfully for this call / transfer | continue your state machine |
+| `ErrWouldBlock` | no progress possible now | stop attempting; wait for readiness/completion; retry |
+| `ErrMore` | progress happened; more completions will follow | process now; keep the operation active; continue polling |
+| other error | failure | handle/log/close/backoff as appropriate |
+
+### Note: `iox.Copy` and `(0, nil)` reads
+
+The Go `io.Reader` contract allows `Read` to return `(0, nil)` to mean “no progress”, not end-of-stream.
+Well-behaved Readers should avoid `(0, nil)` except when `len(p) == 0`.
+
+`iox.Copy` intentionally treats a `(0, nil)` read as “stop copying now” and returns `(written, nil)`.
+This avoids hidden spinning inside a helper in non-blocking/event-loop code.
+If you need strict forward-progress detection across repeated `(0, nil)`, implement that policy at your call site.
+
+## Quick start
+
+Install with `go get`:
+```shell
+go get code.hybscloud.com/iox
+```
+
+```go
+package main
+
+import (
+    "bytes"
+    "fmt"
+
+    "code.hybscloud.com/iox"
+)
+
+func main() {
+    src := bytes.NewBufferString("hello")
+    var dst bytes.Buffer
+    n, err := iox.Copy(&dst, src)
+    fmt.Println(n, err, dst.String()) // 5 <nil> hello
+}
+```
+
+## API overview
+
+- Errors
+  - `ErrWouldBlock`, `ErrMore`
+
+- Copy
+  - `Copy(dst Writer, src Reader) (int64, error)`
+  - `CopyBuffer(dst Writer, src Reader, buf []byte) (int64, error)`
+  - `CopyN(dst Writer, src Reader, n int64) (int64, error)`
+  - `CopyNBuffer(dst Writer, src Reader, n int64, buf []byte) (int64, error)`
+
+- Tee
+  - `TeeReader(r Reader, w Writer) Reader`
+  - `TeeWriter(primary, tee Writer) Writer`
+
+- Adapters
+  - `AsWriterTo(r Reader) Reader` (adds `io.WriterTo` via `iox.Copy`)
+  - `AsReaderFrom(w Writer) Writer` (adds `io.ReaderFrom` via `iox.Copy`)
+
+- Semantics
+  - `IsNonFailure(err error) bool`
+  - `IsWouldBlock(err error) bool`
+  - `IsMore(err error) bool`
+  - `IsProgress(err error) bool`
+
+## Fast paths and semantic preservation
+
+`iox.Copy` uses standard "io" fast paths when available:
+
+- if `src` implements `io.WriterTo`, `iox.Copy` calls `WriteTo`
+- else if `dst` implements `io.ReaderFrom`, `iox.Copy` calls `ReadFrom`
+- else it uses a fixed-size stack buffer (`32KiB`) and a read/write loop
+
+To preserve `ErrWouldBlock` / `ErrMore` across fast paths, ensure your `WriteTo` / `ReadFrom` implementations return those errors when appropriate.
+
+If you have a plain `io.Reader`/`io.Writer` but want the fast-path interfaces to exist *and* preserve semantics, wrap with:
+
+- `iox.AsWriterTo(r)` to add a `WriteTo` implemented via `iox.Copy`
+- `iox.AsReaderFrom(w)` to add a `ReadFrom` implemented via `iox.Copy`
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
+
+©2025 Hayabusa Cloud Co., Ltd.
