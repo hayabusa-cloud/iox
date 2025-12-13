@@ -35,6 +35,10 @@ Go `io` パッケージ向けのノンブロッキングセマンティック：
 | `ErrMore` | 進捗があった; まだ completion が続く | いま処理する; 操作を active のまま維持; polling を継続 |
 | その他の error | failure | 適切に処理/ログ/クローズ/バックオフ |
 
+補足:
+- `iox.Copy` は「部分的に進捗した後に停止した」または「multi-shot の継続を交付する」ことを示すために、`(written > 0, ErrWouldBlock)` や `(written > 0, ErrMore)` を返すことがあります。
+- `(0, nil)` の Read は「いまはコピーを止める」として扱い、helper 内にスピンを隠さないために `(written, nil)` を返します。
+
 ### 注意: `iox.Copy` と `(0, nil)` の Read
 
 Go の `io.Reader` 約束では、`Read` が `(0, nil)` を返して「進捗なし」を表すことが許されています（EOF ではありません）。

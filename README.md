@@ -35,6 +35,10 @@ For operations that adopt `iox` semantics:
 | `ErrMore` | progress happened; more completions will follow | process now; keep the operation active; continue polling |
 | other error | failure | handle/log/close/backoff as appropriate |
 
+Notes:
+- `iox.Copy` may return `(written > 0, ErrWouldBlock)` or `(written > 0, ErrMore)` to report partial progress before stalling or before delivering a multi-shot continuation.
+- `(0, nil)` reads are treated as “stop copying now” and return `(written, nil)` to avoid hidden spinning inside helpers.
+
 ### Note: `iox.Copy` and `(0, nil)` reads
 
 The Go `io.Reader` contract allows `Read` to return `(0, nil)` to mean “no progress”, not end-of-stream.

@@ -35,6 +35,10 @@ Pour les opérations qui adoptent la sémantique `iox` :
 | `ErrMore` | du progrès a eu lieu ; d’autres completions suivront | traiter maintenant ; garder l’opération active ; continuer le polling |
 | autre erreur | échec | gérer/journaliser/fermer/backoff selon le cas |
 
+Notes :
+- `iox.Copy` peut retourner `(written > 0, ErrWouldBlock)` ou `(written > 0, ErrMore)` pour signaler un progrès partiel avant un arrêt (would-block) ou avant de livrer une continuation multi-shot.
+- Les lectures `(0, nil)` sont traitées comme « arrêter la copie maintenant » et retournent `(written, nil)` pour éviter de cacher du spinning dans les helpers.
+
 ### Note : `iox.Copy` et les lectures `(0, nil)`
 
 Le contrat Go `io.Reader` autorise `Read` à retourner `(0, nil)` pour signifier « pas de progrès », pas fin de flux.

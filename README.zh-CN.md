@@ -35,6 +35,10 @@
 | `ErrMore` | 已取得进展；后续还会继续完成 | 现在就处理；保持操作活跃；继续轮询 |
 | 其他错误 | 失败 | 按需处理/记录/关闭/退避 |
 
+补充说明：
+- `iox.Copy` 可能返回 `(written > 0, ErrWouldBlock)` 或 `(written > 0, ErrMore)`，用于表达“已产生部分进展，然后发生停滞”或“已产生部分进展，并需要交付 multi-shot 的后续”。
+- 对于 `(0, nil)` 的 Read，`iox.Copy` 会将其视为“现在停止复制”，并返回 `(written, nil)`，以避免在 helper 内隐藏自旋。
+
 ### 注意：`iox.Copy` 与 `(0, nil)` 的 Read
 
 Go 的 `io.Reader` 契约允许 `Read` 返回 `(0, nil)` 来表示“没有进展”，而不是流结束。
