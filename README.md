@@ -52,20 +52,41 @@ go get code.hybscloud.com/iox
 ```
 
 ```go
-package main
+type reader struct{ step int }
 
-import (
-    "bytes"
-    "fmt"
-
-    "code.hybscloud.com/iox"
-)
+func (r *reader) Read(p []byte) (int, error) {
+	switch r.step {
+	case 0:
+		r.step++
+		return copy(p, "hello"), iox.ErrMore
+	case 1:
+		r.step++
+		return copy(p, "world"), nil
+	case 2:
+		r.step++
+		return 0, iox.ErrWouldBlock
+	case 3:
+		r.step++
+		return copy(p, "iox"), nil
+	default:
+		return 0, io.EOF
+	}
+}
 
 func main() {
-    src := bytes.NewBufferString("hello")
-    var dst bytes.Buffer
-    n, err := iox.Copy(&dst, src)
-    fmt.Println(n, err, dst.String()) // 5 <nil> hello
+	src := &reader{}
+	var dst bytes.Buffer
+
+	n, err := iox.Copy(&dst, src)
+	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=5  err=io: expect more  buf="hello"
+	_, _ = iox.CopyN(io.Discard, &dst, 5)                    // consume "hello"
+
+	n, err = iox.Copy(&dst, src)
+	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=5  err=io: would block   buf="world"
+	_, _ = iox.CopyN(io.Discard, &dst, 5)                    // consume "world"
+
+	n, err = iox.Copy(&dst, src)
+	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=3  err=<nil>            buf="iox"
 }
 ```
 
