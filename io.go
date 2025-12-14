@@ -17,6 +17,19 @@ func Copy(dst Writer, src Reader) (written int64, err error) {
 	return copyBuffer(dst, src, nil)
 }
 
+// CopyPolicy is like Copy but consults policy when encountering semantic errors.
+//
+// Semantics:
+//   - If policy is nil, behavior is identical to Copy (default non-blocking semantics).
+//   - If policy returns PolicyRetry on ErrWouldBlock/ErrMore, the engine will
+//     call policy.Yield(op) and retry from that point; otherwise it returns.
+func CopyPolicy(dst Writer, src Reader, policy SemanticPolicy) (written int64, err error) {
+	if policy == nil {
+		return copyBuffer(dst, src, nil)
+	}
+	return copyBufferPolicy(dst, src, nil, policy)
+}
+
 // CopyBuffer is like Copy but stages through buf if needed.
 // If buf is nil, a stack buffer is used.
 // If buf has zero length, CopyBuffer panics.
@@ -25,6 +38,21 @@ func CopyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 		panic("empty buffer in CopyBuffer")
 	}
 	return copyBuffer(dst, src, buf)
+}
+
+// CopyBufferPolicy is like CopyBuffer but consults policy on semantic errors.
+//
+//   - nil policy: identical to CopyBuffer
+//   - non-nil: PolicyRetry triggers policy.Yield(op) and a retry; otherwise the
+//     semantic error is returned unchanged.
+func CopyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy) (written int64, err error) {
+	if buf != nil && len(buf) == 0 {
+		panic("empty buffer in CopyBufferPolicy")
+	}
+	if policy == nil {
+		return copyBuffer(dst, src, buf)
+	}
+	return copyBufferPolicy(dst, src, buf, policy)
 }
 
 // CopyN copies n bytes (or until an error) from src to dst.
@@ -59,6 +87,21 @@ func CopyN(dst Writer, src Reader, n int64) (written int64, err error) {
 	return written, err
 }
 
+// CopyNPolicy is like CopyN but consults policy on semantic errors.
+//
+//   - nil policy: identical to CopyN
+//   - non-nil: uses the policy-aware engine; PolicyRetry yields and retries.
+func CopyNPolicy(dst Writer, src Reader, n int64, policy SemanticPolicy) (written int64, err error) {
+	if n <= 0 {
+		return 0, nil
+	}
+	if policy == nil {
+		return CopyN(dst, src, n)
+	}
+	lr := limitedReader{R: src, N: n}
+	return copyBufferPolicy(dst, &lr, nil, policy)
+}
+
 // CopyNBuffer is like CopyN but stages through buf if needed.
 // If buf is nil, a stack buffer is used.
 // If buf has zero length, CopyNBuffer panics.
@@ -82,6 +125,23 @@ func CopyNBuffer(dst Writer, src Reader, n int64, buf []byte) (written int64, er
 		return written, io.ErrUnexpectedEOF
 	}
 	return written, err
+}
+
+// CopyNBufferPolicy is like CopyNBuffer but consults policy on semantic errors.
+//
+//   - nil policy: identical to CopyNBuffer
+func CopyNBufferPolicy(dst Writer, src Reader, n int64, buf []byte, policy SemanticPolicy) (written int64, err error) {
+	if n <= 0 {
+		return 0, nil
+	}
+	if buf != nil && len(buf) == 0 {
+		panic("empty buffer in CopyNBufferPolicy")
+	}
+	if policy == nil {
+		return CopyNBuffer(dst, src, n, buf)
+	}
+	lr := limitedReader{R: src, N: n}
+	return copyBufferPolicy(dst, &lr, buf, policy)
 }
 
 type limitedReader struct {
@@ -150,6 +210,137 @@ func copyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 				return written, ErrWouldBlock
 			}
 			if er == ErrMore {
+				return written, ErrMore
+			}
+			return written, er
+		}
+
+		if nr == 0 {
+			return written, nil
+		}
+	}
+}
+
+// copyBufferPolicy is a policy-aware copy implementation.
+// policy is guaranteed non-nil by callers.
+func copyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy) (written int64, err error) {
+	// Fast paths with policy awareness: loop and consult policy on semantic errors.
+	if wt, ok := src.(WriterTo); ok {
+		var total int64
+		for {
+			n, e := wt.WriteTo(dst)
+			if n > 0 {
+				total += n
+			}
+			if e == nil {
+				return total, nil
+			}
+			if e == io.EOF {
+				return total, nil
+			}
+			if e == ErrWouldBlock {
+				if policy.OnWouldBlock(OpCopyWriterTo) == PolicyRetry {
+					policy.Yield(OpCopyWriterTo)
+					continue
+				}
+				return total, ErrWouldBlock
+			}
+			if e == ErrMore {
+				if policy.OnMore(OpCopyWriterTo) == PolicyRetry {
+					policy.Yield(OpCopyWriterTo)
+					continue
+				}
+				return total, ErrMore
+			}
+			return total, e
+		}
+	}
+	if rf, ok := dst.(ReaderFrom); ok {
+		var total int64
+		for {
+			n, e := rf.ReadFrom(src)
+			if n > 0 {
+				total += n
+			}
+			if e == nil {
+				return total, nil
+			}
+			if e == io.EOF {
+				return total, nil
+			}
+			if e == ErrWouldBlock {
+				if policy.OnWouldBlock(OpCopyReaderFrom) == PolicyRetry {
+					policy.Yield(OpCopyReaderFrom)
+					continue
+				}
+				return total, ErrWouldBlock
+			}
+			if e == ErrMore {
+				if policy.OnMore(OpCopyReaderFrom) == PolicyRetry {
+					policy.Yield(OpCopyReaderFrom)
+					continue
+				}
+				return total, ErrMore
+			}
+			return total, e
+		}
+	}
+
+	var local Buffer
+	if buf == nil {
+		buf = local[:]
+	}
+
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			// write possibly in multiple attempts if writer would-block/more
+			off := 0
+			for off < nr {
+				nw, ew := dst.Write(buf[off:nr])
+				if nw > 0 {
+					written += int64(nw)
+					off += nw
+				}
+				if ew != nil {
+					if ew == ErrWouldBlock {
+						if policy.OnWouldBlock(OpCopyWrite) == PolicyRetry {
+							policy.Yield(OpCopyWrite)
+							continue
+						}
+						return written, ErrWouldBlock
+					}
+					if ew == ErrMore {
+						if policy.OnMore(OpCopyWrite) == PolicyRetry {
+							policy.Yield(OpCopyWrite)
+							continue
+						}
+						return written, ErrMore
+					}
+					return written, ew
+				}
+				if nw == 0 {
+					return written, io.ErrShortWrite
+				}
+			}
+		}
+
+		if er != nil {
+			if er == io.EOF {
+				return written, nil
+			}
+			if er == ErrWouldBlock {
+				if policy.OnWouldBlock(OpCopyRead) == PolicyRetry {
+					policy.Yield(OpCopyRead)
+					continue
+				}
+				return written, ErrWouldBlock
+			}
+			if er == ErrMore {
+				if policy.OnMore(OpCopyRead) == PolicyRetry {
+					policy.Yield(OpCopyRead)
+					continue
+				}
 				return written, ErrMore
 			}
 			return written, er

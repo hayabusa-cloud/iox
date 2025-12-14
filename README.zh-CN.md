@@ -120,6 +120,14 @@ func main() {
   - `IsMore(err error) bool`
   - `IsProgress(err error) bool`
 
+## 语义策略
+
+一些 helper 支持可选的 `SemanticPolicy`，用于在遇到 `ErrWouldBlock` 或 `ErrMore` 时决定采取何种行为
+（例如：立即返回，或让出/yield 后再重试）。
+
+默认值为 `nil`，表示**保持非阻塞行为**：helper 会将 `ErrWouldBlock` / `ErrMore` 直接返回给调用方，
+不会自行等待或重试。
+
 ## 快速路径与语义保持
 
 `iox.Copy` 在可用时使用标准 `io` 的快速路径：

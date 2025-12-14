@@ -120,6 +120,14 @@ func main() {
   - `IsMore(err error) bool`
   - `IsProgress(err error) bool`
 
+## Política semántica
+
+Algunos helpers aceptan opcionalmente un `SemanticPolicy` para decidir qué hacer cuando encuentran `ErrWouldBlock` o `ErrMore`
+(por ejemplo, devolver inmediatamente frente a ceder/yield y reintentar).
+
+El valor por defecto es `nil`, lo que significa que se **preserva el comportamiento no bloqueante**: el helper devuelve
+`ErrWouldBlock` / `ErrMore` al llamador y no espera ni reintenta por su cuenta.
+
 ## Fast paths y preservación de semántica
 
 `iox.Copy` usa los fast paths estándar de `io` cuando están disponibles:
