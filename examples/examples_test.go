@@ -57,3 +57,18 @@ func TestCopyWithWouldBlock(t *testing.T) {
 		t.Fatalf("want out=ok got %q", out)
 	}
 }
+
+func TestCopyWithPolicy(t *testing.T) {
+	n, err, out := ex.CopyWithPolicy()
+
+	// The policy retries on ErrWouldBlock, so the example should complete in a single call.
+	if err != nil {
+		t.Fatalf("unexpected err %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("want n=2 got %d", n)
+	}
+	if out != "ok" {
+		t.Fatalf("want out=ok got %q", out)
+	}
+}
