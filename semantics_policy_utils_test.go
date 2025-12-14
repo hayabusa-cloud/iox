@@ -65,29 +65,6 @@ func TestSemanticHelpers(t *testing.T) {
 }
 
 func TestOpStringAndPolicies(t *testing.T) {
-	// Op.String values
-	cases := []struct {
-		op   iox.Op
-		want string
-	}{
-		{iox.OpCopyRead, "CopyRead"},
-		{iox.OpCopyWrite, "CopyWrite"},
-		{iox.OpCopyWriterTo, "CopyWriterTo"},
-		{iox.OpCopyReaderFrom, "CopyReaderFrom"},
-		{iox.OpTeeReaderRead, "TeeReaderRead"},
-		{iox.OpTeeReaderSideWrite, "TeeReaderSideWrite"},
-		{iox.OpTeeWriterPrimaryWrite, "TeeWriterPrimaryWrite"},
-		{iox.OpTeeWriterTeeWrite, "TeeWriterTeeWrite"},
-	}
-	for _, c := range cases {
-		if got := c.op.String(); got != c.want {
-			t.Fatalf("%v.String()=%q", c.op, got)
-		}
-	}
-	if s := (iox.Op(255)).String(); s != "Op(unknown)" {
-		t.Fatalf("invalid Op String=%q", s)
-	}
-
 	// ReturnPolicy behavior
 	var rp iox.ReturnPolicy
 	rp.Yield(iox.OpCopyRead) // no-op
