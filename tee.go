@@ -16,6 +16,20 @@ func TeeReader(r Reader, w Writer) Reader {
 	return teeReader{r: r, w: w}
 }
 
+// TeeReaderPolicy is like TeeReader but consults policy when encountering
+// semantic errors from r.Read or the side write to w.
+//
+//   - nil policy: identical to TeeReader
+//   - non-nil: PolicyRetry triggers policy.Yield(op) and a retry. For read-side
+//     semantics when n>0, the bytes are delivered to the caller after side write,
+//     and a retry decision of PolicyRetry results in returning (n, nil).
+func TeeReaderPolicy(r Reader, w Writer, policy SemanticPolicy) Reader {
+	if policy == nil {
+		return TeeReader(r, w)
+	}
+	return teeReaderWithPolicy{r: r, w: w, p: policy}
+}
+
 type teeReader struct {
 	r Reader
 	w Writer
@@ -40,6 +54,83 @@ func (t teeReader) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
+type teeReaderWithPolicy struct {
+	r Reader
+	w Writer
+	p SemanticPolicy
+}
+
+func (t teeReaderWithPolicy) Read(p []byte) (int, error) {
+	for {
+		n, er := t.r.Read(p)
+		if n > 0 {
+			// Write to side, retrying on policy if needed.
+			off := 0
+			for off < n {
+				nw, ew := t.w.Write(p[off:n])
+				if nw > 0 {
+					off += nw
+				}
+				if ew != nil {
+					if ew == ErrWouldBlock {
+						if t.p.OnWouldBlock(OpTeeReaderSideWrite) == PolicyRetry {
+							t.p.Yield(OpTeeReaderSideWrite)
+							continue
+						}
+						return off, ErrWouldBlock
+					}
+					if ew == ErrMore {
+						if t.p.OnMore(OpTeeReaderSideWrite) == PolicyRetry {
+							t.p.Yield(OpTeeReaderSideWrite)
+							continue
+						}
+						return off, ErrMore
+					}
+					return off, ew
+				}
+				if nw == 0 {
+					return off, io.ErrShortWrite
+				}
+			}
+
+			// After side write completes, decide based on read-side semantic.
+			if er == ErrWouldBlock {
+				if t.p.OnWouldBlock(OpTeeReaderRead) == PolicyRetry {
+					t.p.Yield(OpTeeReaderRead)
+					// Treat as successful read for this call.
+					return n, nil
+				}
+				return n, ErrWouldBlock
+			}
+			if er == ErrMore {
+				if t.p.OnMore(OpTeeReaderRead) == PolicyRetry {
+					t.p.Yield(OpTeeReaderRead)
+					return n, nil
+				}
+				return n, ErrMore
+			}
+			return n, er
+		}
+
+		// n == 0 path: we may need to loop on policy retry.
+		if er == ErrWouldBlock {
+			if t.p.OnWouldBlock(OpTeeReaderRead) == PolicyRetry {
+				t.p.Yield(OpTeeReaderRead)
+				continue
+			}
+			return 0, ErrWouldBlock
+		}
+		if er == ErrMore {
+			if t.p.OnMore(OpTeeReaderRead) == PolicyRetry {
+				t.p.Yield(OpTeeReaderRead)
+				continue
+			}
+			return 0, ErrMore
+		}
+		return 0, er
+	}
+}
+
 // TeeWriter returns a Writer that duplicates all writes to primary and tee.
 // If writing to primary returns an error or short count, it is returned
 // immediately. Otherwise, the data is written to tee. If writing to tee fails
@@ -47,6 +138,18 @@ func (t teeReader) Read(p []byte) (n int, err error) {
 // Special errors ErrWouldBlock and ErrMore are propagated unchanged.
 func TeeWriter(primary Writer, tee Writer) Writer {
 	return teeWriter{w: primary, tee: tee}
+}
+
+// TeeWriterPolicy is like TeeWriter but consults policy on semantic errors.
+//
+//   - nil policy: identical to TeeWriter
+//   - non-nil: PolicyRetry yields and retries writing remaining bytes for either
+//     the primary or tee writes. Short writes are reported as io.ErrShortWrite.
+func TeeWriterPolicy(primary Writer, tee Writer, policy SemanticPolicy) Writer {
+	if policy == nil {
+		return TeeWriter(primary, tee)
+	}
+	return teeWriterWithPolicy{w: primary, tee: tee, p: policy}
 }
 
 type teeWriter struct {
@@ -68,6 +171,73 @@ func (t teeWriter) Write(p []byte) (n int, err error) {
 	}
 	if n2 != len(p) {
 		return n2, io.ErrShortWrite
+	}
+	return len(p), nil
+}
+
+type teeWriterWithPolicy struct {
+	w   Writer
+	tee Writer
+	p   SemanticPolicy
+}
+
+func (t teeWriterWithPolicy) Write(p []byte) (int, error) {
+	// Primary write with retry per policy.
+	off := 0
+	for off < len(p) {
+		nw, ew := t.w.Write(p[off:])
+		if nw > 0 {
+			off += nw
+		}
+		if ew != nil {
+			if ew == ErrWouldBlock {
+				if t.p.OnWouldBlock(OpTeeWriterPrimaryWrite) == PolicyRetry {
+					t.p.Yield(OpTeeWriterPrimaryWrite)
+					continue
+				}
+				return off, ErrWouldBlock
+			}
+			if ew == ErrMore {
+				if t.p.OnMore(OpTeeWriterPrimaryWrite) == PolicyRetry {
+					t.p.Yield(OpTeeWriterPrimaryWrite)
+					continue
+				}
+				return off, ErrMore
+			}
+			return off, ew
+		}
+		if nw == 0 {
+			return off, io.ErrShortWrite
+		}
+	}
+
+	// Tee write with retry per policy.
+	off = 0
+	for off < len(p) {
+		nw, ew := t.tee.Write(p[off:])
+		if nw > 0 {
+			off += nw
+		}
+		if ew != nil {
+			if ew == ErrWouldBlock {
+				if t.p.OnWouldBlock(OpTeeWriterTeeWrite) == PolicyRetry {
+					t.p.Yield(OpTeeWriterTeeWrite)
+					continue
+				}
+				return off, ErrWouldBlock
+			}
+			if ew == ErrMore {
+				if t.p.OnMore(OpTeeWriterTeeWrite) == PolicyRetry {
+					t.p.Yield(OpTeeWriterTeeWrite)
+					continue
+				}
+				return off, ErrMore
+			}
+			return off, ew
+		}
+		if nw == 0 {
+			return off, io.ErrShortWrite
+		}
 	}
 	return len(p), nil
 }
