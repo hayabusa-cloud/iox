@@ -83,6 +83,11 @@ type SemanticPolicy interface {
 
 // PolicyFunc is a convenience implementation for callers that want to inject
 // behavior without defining a struct type.
+//
+// Default behaviors when fields are nil:
+//   - YieldFunc: calls runtime.Gosched() to yield the processor
+//   - WouldBlockFunc: returns PolicyReturn (caller handles ErrWouldBlock)
+//   - MoreFunc: returns PolicyReturn (caller handles ErrMore)
 type PolicyFunc struct {
 	YieldFunc      func(op Op)
 	WouldBlockFunc func(op Op) PolicyAction
