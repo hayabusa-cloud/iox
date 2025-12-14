@@ -65,39 +65,5 @@ func TestSemanticHelpers(t *testing.T) {
 }
 
 func TestOpStringAndPolicies(t *testing.T) {
-	// ReturnPolicy behavior
-	var rp iox.ReturnPolicy
-	rp.Yield(iox.OpCopyRead) // no-op
-	if rp.OnWouldBlock(iox.OpCopyRead) != iox.PolicyReturn || rp.OnMore(iox.OpCopyWrite) != iox.PolicyReturn {
-		t.Fatal("ReturnPolicy should always return PolicyReturn")
-	}
-
-	// YieldPolicy behavior
-	yp := iox.YieldPolicy{}
-	yp.Yield(iox.OpCopyRead) // default Gosched path
-	if yp.OnWouldBlock(iox.OpCopyRead) != iox.PolicyRetry {
-		t.Fatal("YieldPolicy OnWouldBlock should retry")
-	}
-	if yp.OnMore(iox.OpCopyWrite) != iox.PolicyReturn {
-		t.Fatal("YieldPolicy OnMore should return")
-	}
-
-	// YieldOnWriteWouldBlockPolicy branching
-	yww := iox.YieldOnWriteWouldBlockPolicy{}
-	yww.Yield(iox.OpCopyWrite) // default Gosched
-	writeOps := []iox.Op{
-		iox.OpCopyWrite, iox.OpCopyWriterTo, iox.OpCopyReaderFrom,
-		iox.OpTeeReaderSideWrite, iox.OpTeeWriterPrimaryWrite, iox.OpTeeWriterTeeWrite,
-	}
-	for _, op := range writeOps {
-		if yww.OnWouldBlock(op) != iox.PolicyRetry {
-			t.Fatalf("YieldOnWriteWouldBlockPolicy should retry for %v", op)
-		}
-	}
-	if yww.OnWouldBlock(iox.OpCopyRead) != iox.PolicyReturn {
-		t.Fatal("YieldOnWriteWouldBlockPolicy should return for read would-block")
-	}
-	if yww.OnMore(0) != iox.PolicyReturn {
-		t.Fatal("YieldOnWriteWouldBlockPolicy OnMore should return")
-	}
+	// (Policy tests removed; see policy_extra_test.go for coverage)
 }
