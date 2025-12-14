@@ -119,6 +119,13 @@ func main() {
   - `IsMore(err error) bool`
   - `IsProgress(err error) bool`
 
+## Tee semantics (counts and errors)
+
+- `TeeReader` returns `n` as the number of bytes read from `r` (source progress), even if the side write fails/is short.
+- `TeeWriter` returns `n` as the number of bytes accepted by `primary` (primary progress), even if the tee write fails/is short.
+- When `n > 0`, a tee adapter may return `(n, err)` where `err` comes from the side/tee (including `ErrWouldBlock`/`ErrMore`). Process `p[:n]` first.
+- For best interoperability with policy-driven helpers, return `ErrWouldBlock`/`ErrMore` as-is (avoid wrapping).
+
 ## Semantic Policy
 
 Some helpers accept an optional `SemanticPolicy` to decide what to do when they encounter `ErrWouldBlock` or `ErrMore`

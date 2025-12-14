@@ -64,7 +64,9 @@ func TestTeeReaderPolicy_SideWriteMore_ReturnsMore(t *testing.T) {
 	tr := iox.TeeReaderPolicy(r, w, iox.YieldPolicy{})
 	buf := make([]byte, 8)
 	n, err := tr.Read(buf)
-	if !iox.IsMore(err) || n != 2 || string(buf[:n]) != "ab" {
+	// Count semantics: n reflects bytes consumed from the source,
+	// even when the side writer returns a boundary/error.
+	if !iox.IsMore(err) || n != 3 || string(buf[:n]) != "abc" {
 		t.Fatalf("n=%d err=%v data=%q", n, err, string(buf[:n]))
 	}
 }
@@ -74,8 +76,8 @@ func TestTeeReaderPolicy_SideShortWrite_Error(t *testing.T) {
 	tr := iox.TeeReaderPolicy(r, zeroWriter{}, iox.YieldPolicy{})
 	buf := make([]byte, 2)
 	n, err := tr.Read(buf)
-	if err == nil || err != iox.ErrShortWrite || n != 0 {
-		t.Fatalf("want ErrShortWrite got n=%d err=%v", n, err)
+	if err == nil || err != iox.ErrShortWrite || n != 1 {
+		t.Fatalf("want (1, ErrShortWrite) got n=%d err=%v", n, err)
 	}
 }
 
@@ -113,8 +115,9 @@ func TestTeeWriterPolicy_PrimaryMore_Returns(t *testing.T) {
 	if !iox.IsMore(err) || n != 1 {
 		t.Fatalf("want More after 1 byte, got n=%d err=%v", n, err)
 	}
-	if tee.Len() != 0 {
-		t.Fatalf("tee should not have been written on primary error")
+	// Count semantics: tee mirrors the bytes accepted by primary.
+	if tee.String() != "x" {
+		t.Fatalf("tee=%q", tee.String())
 	}
 }
 
@@ -123,7 +126,8 @@ func TestTeeWriterPolicy_TeeMore_Returns(t *testing.T) {
 	tee := &moreWriter{k: 0} // immediate ErrMore with 0 written
 	tw := iox.TeeWriterPolicy(&primary, tee, iox.YieldPolicy{})
 	n, err := tw.Write([]byte("q"))
-	if !iox.IsMore(err) || n != 0 || primary.String() != "q" {
+	// Count semantics: n reflects primary progress.
+	if !iox.IsMore(err) || n != 1 || primary.String() != "q" {
 		t.Fatalf("n=%d err=%v primary=%q", n, err, primary.String())
 	}
 }
@@ -132,8 +136,9 @@ func TestTeeWriterPolicy_TeeShortWrite_Error(t *testing.T) {
 	var primary bytes.Buffer
 	tw := iox.TeeWriterPolicy(&primary, zeroWriter{}, iox.YieldPolicy{})
 	n, err := tw.Write([]byte("hello"))
-	if err == nil || err != iox.ErrShortWrite || n != 0 {
-		t.Fatalf("want ErrShortWrite got n=%d err=%v", n, err)
+	// Count semantics: n reflects primary progress.
+	if err == nil || err != iox.ErrShortWrite || n != 5 {
+		t.Fatalf("want (5, ErrShortWrite) got n=%d err=%v", n, err)
 	}
 }
 
@@ -143,8 +148,9 @@ func TestTeeReaderPolicy_SideGenericError_Returns(t *testing.T) {
 	tr := iox.TeeReaderPolicy(r, fw, iox.YieldPolicy{})
 	buf := make([]byte, 4)
 	n, err := tr.Read(buf)
-	if err == nil || n != 1 || err.Error() != "side-err" {
-		t.Fatalf("want side-err after 1 byte, got n=%d err=%v", n, err)
+	// Count semantics: n reflects bytes consumed from the source.
+	if err == nil || n != 2 || err.Error() != "side-err" {
+		t.Fatalf("want side-err with n=2, got n=%d err=%v", n, err)
 	}
 }
 
@@ -174,7 +180,8 @@ func TestTeeWriterPolicy_TeeGenericError_Returns(t *testing.T) {
 	var primary bytes.Buffer
 	tw := iox.TeeWriterPolicy(&primary, errZeroWriter{err: errors.New("tee-err")}, iox.YieldPolicy{})
 	n, err := tw.Write([]byte("xy"))
-	if err == nil || n != 0 || err.Error() != "tee-err" || primary.String() != "xy" {
-		t.Fatalf("want tee-err after 0 byte, got n=%d err=%v primary=%q", n, err, primary.String())
+	// Count semantics: n reflects primary progress.
+	if err == nil || n != 2 || err.Error() != "tee-err" || primary.String() != "xy" {
+		t.Fatalf("want tee-err with n=2, got n=%d err=%v primary=%q", n, err, primary.String())
 	}
 }

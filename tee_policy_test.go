@@ -52,8 +52,9 @@ func TestTeeReaderPolicy_SideWriteShortZero_ErrShortWrite(t *testing.T) {
 	tr := iox.TeeReaderPolicy(r, shortZeroWriter{}, &recPolicy{})
 	var b [1]byte
 	n, err := tr.Read(b[:])
-	if !errors.Is(err, iox.ErrShortWrite) || n != 0 {
-		t.Fatalf("want (0, ErrShortWrite) got (%d, %v)", n, err)
+	// Count semantics: n reflects bytes consumed from the source.
+	if !errors.Is(err, iox.ErrShortWrite) || n != 1 {
+		t.Fatalf("want (1, ErrShortWrite) got (%d, %v)", n, err)
 	}
 }
 
@@ -81,7 +82,8 @@ func TestTeeWriterPolicy_PrimaryShortZero_ErrShortWrite(t *testing.T) {
 func TestTeeWriterPolicy_TeeShortZero_ErrShortWrite(t *testing.T) {
 	w := iox.TeeWriterPolicy(&bytes.Buffer{}, shortZeroWriter{}, &recPolicy{})
 	n, err := w.Write([]byte("x"))
-	if !errors.Is(err, iox.ErrShortWrite) || n != 0 {
-		t.Fatalf("want (0, ErrShortWrite) got (%d, %v)", n, err)
+	// Count semantics: n reflects primary progress.
+	if !errors.Is(err, iox.ErrShortWrite) || n != 1 {
+		t.Fatalf("want (1, ErrShortWrite) got (%d, %v)", n, err)
 	}
 }
