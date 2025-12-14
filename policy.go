@@ -65,8 +65,8 @@ const (
 
 // SemanticPolicy customizes how an engine reacts to iox semantic errors.
 //
-// Mathematical view: this is a transition function δ(op, err) -> action, plus an
-// optional yield hook used when δ selects PolicyRetry.
+// This is a decision function that maps (operation, error) pairs to actions,
+// plus an optional yield hook for when retry is selected.
 //
 // Contract expectations:
 //   - OnWouldBlock / OnMore are only called for the matching semantic errors.
