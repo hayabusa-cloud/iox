@@ -120,6 +120,13 @@ func main() {
   - `IsMore(err error) bool`
   - `IsProgress(err error) bool`
 
+## Tee のセマンティクス（count と error）
+
+- `TeeReader` は `n` を `r` から読めたバイト数（source progress）として返します。side write が失敗/short でも `n` は変わりません。
+- `TeeWriter` は `n` を `primary` が受理したバイト数（primary progress）として返します。tee write が失敗/short でも `n` は変わりません。
+- `n > 0` のとき、tee adapter は side/tee 由来の `err`（`ErrWouldBlock`/`ErrMore` を含む）とともに `(n, err)` を返すことがあります。まず `p[:n]` を処理してください。
+- policy 駆動の helper と相性を良くするため、`ErrWouldBlock`/`ErrMore` はそのまま返すことを推奨します（wrap しない）。
+
 ## セマンティックポリシー
 
 一部のヘルパーはオプションで `SemanticPolicy` を受け取り、`ErrWouldBlock` や `ErrMore` に遭遇したときにどう振る舞うか

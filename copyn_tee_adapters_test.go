@@ -114,7 +114,8 @@ func TestTeeWriter_TeeShortWrite(t *testing.T) {
 	if !errors.Is(err, iox.ErrShortWrite) {
 		t.Fatalf("want short write got %v", err)
 	}
-	if n != 3 {
+	// Count semantics: n reflects primary progress.
+	if n != 4 {
 		t.Fatalf("n=%d", n)
 	}
 	if p.String() != "abcd" {
@@ -144,7 +145,8 @@ func TestTeeReader_ShortWriteToSide(t *testing.T) {
 	if !errors.Is(err, iox.ErrShortWrite) {
 		t.Fatalf("want short write got %v", err)
 	}
-	if n != 2 {
+	// Count semantics: n reflects bytes consumed from the source.
+	if n != 3 {
 		t.Fatalf("n=%d", n)
 	}
 }

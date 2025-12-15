@@ -393,7 +393,8 @@ func TestTeeReaderPolicy_SideWouldBlock_ReturnsWouldBlock(t *testing.T) {
 	tr := iox.TeeReaderPolicy(r, wbOnlyWriter{}, iox.ReturnPolicy{})
 	buf := make([]byte, 8)
 	n, err := tr.Read(buf)
-	if !iox.IsWouldBlock(err) || n != 0 {
+	// Count semantics: n reflects bytes consumed from the source.
+	if !iox.IsWouldBlock(err) || n != 2 {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
@@ -402,7 +403,8 @@ func TestTeeWriterPolicy_TeeWouldBlock_ReturnsWouldBlock(t *testing.T) {
 	var primary bytes.Buffer
 	w := iox.TeeWriterPolicy(&primary, wbOnlyWriter{}, iox.ReturnPolicy{})
 	n, err := w.Write([]byte("ab"))
-	if !iox.IsWouldBlock(err) || n != 0 || primary.String() != "ab" {
+	// Count semantics: n reflects primary progress.
+	if !iox.IsWouldBlock(err) || n != 2 || primary.String() != "ab" {
 		t.Fatalf("n=%d err=%v primary=%q", n, err, primary.String())
 	}
 }
@@ -723,7 +725,9 @@ func TestTeeWriterPolicy_PrimaryPartialWouldBlock_ReturnsCounts(t *testing.T) {
 	var tee bytes.Buffer
 	w := iox.TeeWriterPolicy(p, &tee, iox.ReturnPolicy{})
 	n, err := w.Write([]byte("ab"))
-	if !iox.IsWouldBlock(err) || n != 1 || p.buf.String() != "a" || tee.Len() != 0 {
+	// Count semantics: n reflects primary progress, and tee mirrors
+	// bytes accepted by primary even when primary returns a semantic boundary.
+	if !iox.IsWouldBlock(err) || n != 1 || p.buf.String() != "a" || tee.String() != "a" {
 		t.Fatalf("n=%d err=%v primary=%q tee=%q", n, err, p.buf.String(), tee.String())
 	}
 }
@@ -751,7 +755,8 @@ func TestTeeWriterPolicy_TeePartialMore_ReturnsCounts(t *testing.T) {
 	tee := &teePartialMore{k: 1}
 	w := iox.TeeWriterPolicy(&primary, tee, iox.ReturnPolicy{})
 	n, err := w.Write([]byte("ab"))
-	if !iox.IsMore(err) || n != 1 || primary.String() != "ab" || tee.buf.String() != "a" {
+	// Count semantics: n reflects primary progress.
+	if !iox.IsMore(err) || n != 2 || primary.String() != "ab" || tee.buf.String() != "a" {
 		t.Fatalf("n=%d err=%v primary=%q tee=%q", n, err, primary.String(), tee.buf.String())
 	}
 }

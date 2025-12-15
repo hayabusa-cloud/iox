@@ -59,8 +59,9 @@ func TestTeeReaderPolicy_SideWrite_WouldBlock_Returns(t *testing.T) {
 	tr := iox.TeeReaderPolicy(r, sideWB{}, &recPolicy{onWB: map[iox.Op]iox.PolicyAction{iox.OpTeeReaderSideWrite: iox.PolicyReturn}})
 	var b [1]byte
 	n, err := tr.Read(b[:])
-	if !errors.Is(err, iox.ErrWouldBlock) || n != 0 {
-		t.Fatalf("want (0, ErrWouldBlock) got (%d, %v)", n, err)
+	// Count semantics: n reflects bytes consumed from the source.
+	if !errors.Is(err, iox.ErrWouldBlock) || n != 1 {
+		t.Fatalf("want (1, ErrWouldBlock) got (%d, %v)", n, err)
 	}
 }
 

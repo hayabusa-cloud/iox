@@ -120,6 +120,13 @@ func main() {
   - `IsMore(err error) bool`
   - `IsProgress(err error) bool`
 
+## Tee 语义（计数与错误）
+
+- `TeeReader` 的 `n` 表示从 `r` 读出的字节数（source progress），即使 side 写入失败/短写也不会改变 `n`。
+- `TeeWriter` 的 `n` 表示 primary 接受的字节数（primary progress），即使 tee 写入失败/短写也不会改变 `n`。
+- 当 `n > 0` 时，tee 适配器可能返回 `(n, err)`，且 `err` 可能来自 side/tee（包含 `ErrWouldBlock`/`ErrMore`）。调用方应先处理 `p[:n]`。
+- 为了让策略（policy）驱动的 helper 行为更可预测，建议直接返回 `ErrWouldBlock`/`ErrMore`（避免包装）。
+
 ## 语义策略
 
 一些 helper 支持可选的 `SemanticPolicy`，用于在遇到 `ErrWouldBlock` 或 `ErrMore` 时决定采取何种行为

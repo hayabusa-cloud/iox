@@ -79,7 +79,8 @@ func TestTeeReader_WriteSideError(t *testing.T) {
 	if !errors.Is(err, fw.err) {
 		t.Fatalf("want side write error got %v", err)
 	}
-	if n != 1 {
+	// Count semantics: n reflects bytes already consumed from r.
+	if n != 2 {
 		t.Fatalf("n=%d", n)
 	}
 }
@@ -118,7 +119,8 @@ func TestTeeWriter_TeeError(t *testing.T) {
 	if !errors.Is(err, teeErr) {
 		t.Fatalf("want teeErr got %v", err)
 	}
-	if n != 0 {
+	// Count semantics: n reflects primary progress.
+	if n != 2 {
 		t.Fatalf("n=%d", n)
 	}
 	if p.String() != "hi" {
