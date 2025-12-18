@@ -48,6 +48,18 @@ Go の `io.Reader` 約束では、`Read` が `(0, nil)` を返して「進捗な
 これは、ノンブロッキング/イベントループコードで helper の内部にスピンを隠さないためです。
 繰り返しの `(0, nil)` に対して厳密な forward progress の検出が必要なら、その方針は呼び出し側で実装してください。
 
+### 注意: `iox.Copy` と部分書き込みリカバリ
+
+ノンブロッキングな宛先へコピーする際、`dst.Write` が semantic error（`ErrWouldBlock` または `ErrMore`）を部分書き込み（`nw < nr`）とともに返すことがあります。この場合、バイトは `src` から読み取られましたが、`dst` へ完全には書き込まれていません。
+
+データ損失を防ぐため、`iox.Copy` はソースポインタのロールバックを試みます：
+- `src` が `io.Seeker` を実装している場合、Copy は `Seek(nw-nr, io.SeekCurrent)` を呼び出して未書き込みバイトを巻き戻します。
+- `src` が `io.Seeker` を実装して**いない**場合、Copy は `ErrNoSeeker` を返し、未書き込みバイトが回復不能であることを示します。
+
+**推奨事項：**
+- ノンブロッキングな宛先へコピーする際は、シーク可能なソース（例: `*os.File`、`*bytes.Reader`）を使用してください。
+- シーク不可能なソース（例: ネットワークソケット）の場合、書き込み側の semantic error に対して `PolicyRetry` を設定した `CopyPolicy` を使用してください。これにより、すべての読み取りバイトが返却前に書き込まれることが保証され、ロールバックの必要がなくなります。
+
 ## クイックスタート
 
 `go get` でインストール:
@@ -98,7 +110,7 @@ func main() {
 ## API 概要
 
 - Errors
-  - `ErrWouldBlock`, `ErrMore`
+  - `ErrWouldBlock`, `ErrMore`, `ErrNoSeeker`
 
 - Copy
   - `Copy(dst Writer, src Reader) (int64, error)`

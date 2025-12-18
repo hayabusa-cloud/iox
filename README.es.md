@@ -48,6 +48,18 @@ Los Readers bien comportados deberían evitar `(0, nil)` salvo cuando `len(p) ==
 Esto evita ocultar el spinning dentro de un helper en código no bloqueante / de event-loop.
 Si necesitas detección estricta de progreso hacia delante ante múltiples `(0, nil)`, implementa esa política en tu call site.
 
+### Nota: `iox.Copy` y recuperación de escritura parcial
+
+Al copiar a un destino no bloqueante, `dst.Write` puede devolver un error semántico (`ErrWouldBlock` o `ErrMore`) con una escritura parcial (`nw < nr`). En este caso, los bytes se han leído de `src` pero no se han escrito completamente en `dst`.
+
+Para prevenir la pérdida de datos, `iox.Copy` intenta retroceder el puntero del origen:
+- Si `src` implementa `io.Seeker`, Copy llama a `Seek(nw-nr, io.SeekCurrent)` para rebobinar los bytes no escritos.
+- Si `src` **no** implementa `io.Seeker`, Copy devuelve `ErrNoSeeker` para señalar que los bytes no escritos son irrecuperables.
+
+**Recomendaciones:**
+- Usa fuentes buscables (por ejemplo, `*os.File`, `*bytes.Reader`) al copiar a destinos no bloqueantes.
+- Para fuentes no buscables (por ejemplo, sockets de red), usa `CopyPolicy` con `PolicyRetry` para errores semánticos del lado de escritura. Esto garantiza que todos los bytes leídos se escriban antes de devolver, evitando la necesidad de rollback.
+
 ## Inicio rápido
 
 Instala con `go get`:
@@ -98,7 +110,7 @@ func main() {
 ## Resumen de API
 
 - Errors
-  - `ErrWouldBlock`, `ErrMore`
+  - `ErrWouldBlock`, `ErrMore`, `ErrNoSeeker`
 
 - Copy
   - `Copy(dst Writer, src Reader) (int64, error)`

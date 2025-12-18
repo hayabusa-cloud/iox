@@ -48,6 +48,18 @@ Go 的 `io.Reader` 契约允许 `Read` 返回 `(0, nil)` 来表示“没有进�
 这样可以避免在非阻塞/事件循环代码中，把“自旋等待”隐藏在 helper 内。
 如果你需要在多次 `(0, nil)` 之间强制前向进展检测，请在调用方实现该策略。
 
+### 注意：`iox.Copy` 与部分写入恢复
+
+当向非阻塞目标复制时，`dst.Write` 可能返回语义错误（`ErrWouldBlock` 或 `ErrMore`）并伴随部分写入（`nw < nr`）。此时，字节已从 `src` 读出但未完全写入 `dst`。
+
+为防止数据丢失，`iox.Copy` 会尝试回滚源指针：
+- 如果 `src` 实现了 `io.Seeker`，Copy 调用 `Seek(nw-nr, io.SeekCurrent)` 来回退未写入的字节。
+- 如果 `src` **未**实现 `io.Seeker`，Copy 返回 `ErrNoSeeker` 以表明未写入的字节无法恢复。
+
+**建议：**
+- 向非阻塞目标复制时，使用可寻址的源（如 `*os.File`、`*bytes.Reader`）。
+- 对于不可寻址的源（如网络套接字），使用 `CopyPolicy` 并为写入端语义错误配置 `PolicyRetry`。这可确保所有已读字节在返回前被写入，从而避免回滚需求。
+
 ## 快速开始
 
 使用 `go get` 安装：
@@ -98,7 +110,7 @@ func main() {
 ## API 概览
 
 - Errors
-  - `ErrWouldBlock`, `ErrMore`
+  - `ErrWouldBlock`, `ErrMore`, `ErrNoSeeker`
 
 - Copy
   - `Copy(dst Writer, src Reader) (int64, error)`
