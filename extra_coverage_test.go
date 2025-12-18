@@ -69,16 +69,8 @@ type writerZeroMore struct{}
 func (writerZeroMore) Write([]byte) (int, error) { return 0, iox.ErrMore }
 
 func TestCopyPolicy_SlowPath_WriteZeroMore_ReturnsMore(t *testing.T) {
-	// Force slow path by using a Reader-only source.
-	delivered := false
-	src := &funcReader{read: func(p []byte) (int, error) {
-		if delivered {
-			return 0, iox.EOF
-		}
-		delivered = true
-		p[0] = 'x'
-		return 1, nil
-	}}
+	// Use bytes.Reader (implements io.Seeker) so rollback succeeds and ErrMore is returned.
+	src := bytes.NewReader([]byte("x"))
 	n, err := iox.CopyPolicy(writerZeroMore{}, src, iox.ReturnPolicy{})
 	if !iox.IsMore(err) || n != 0 {
 		t.Fatalf("want (0, ErrMore) got (%d, %v)", n, err)
