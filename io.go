@@ -4,7 +4,9 @@
 
 package iox
 
-import "io"
+import (
+	"io"
+)
 
 // Copy copies from src to dst until either EOF is reached on src or an error occurs.
 //
@@ -13,6 +15,19 @@ import "io"
 //     written may be > 0 (partial progress); retry after readiness/completion.
 //   - ErrMore: return immediately because progress happened and the operation remains active;
 //     written may be > 0; keep polling for more completions.
+//
+// Partial write recovery (Seeker rollback):
+//
+// If dst.Write returns a semantic error (ErrWouldBlock or ErrMore) with a partial
+// write (nw < nr), Copy attempts to roll back the source pointer by calling
+// src.Seek(nw-nr, io.SeekCurrent) if src implements io.Seeker. This allows the
+// caller to retry Copy without data loss.
+//
+// If src does NOT implement io.Seeker and a partial write occurs with a semantic
+// error, Copy returns ErrNoSeeker to prevent silent data corruption. Callers
+// using non-blocking destinations with non-seekable sources (e.g., sockets) should
+// use CopyPolicy with PolicyRetry to ensure all read bytes are written before
+// returning.
 func Copy(dst Writer, src Reader) (written int64, err error) {
 	return copyBuffer(dst, src, nil)
 }
@@ -23,6 +38,18 @@ func Copy(dst Writer, src Reader) (written int64, err error) {
 //   - If policy is nil, behavior is identical to Copy (default non-blocking semantics).
 //   - If policy returns PolicyRetry on ErrWouldBlock/ErrMore, the engine will
 //     call policy.Yield(op) and retry from that point; otherwise it returns.
+//
+// Partial write recovery:
+//
+// When policy returns PolicyReturn (not retry) on a semantic error with partial
+// write progress, CopyPolicy attempts Seeker rollback on src (same as Copy).
+// If src is not seekable, ErrNoSeeker is returned to prevent silent data loss.
+// When policy returns PolicyRetry, the engine retries the write internally,
+// ensuring all read bytes are written before the next read—no rollback needed.
+//
+// For non-seekable sources (e.g., network sockets) where data integrity is
+// required, configure policy to return PolicyRetry for write-side semantic
+// errors. This guarantees forward progress without data loss.
 func CopyPolicy(dst Writer, src Reader, policy SemanticPolicy) (written int64, err error) {
 	if policy == nil {
 		return copyBuffer(dst, src, nil)
@@ -33,6 +60,10 @@ func CopyPolicy(dst Writer, src Reader, policy SemanticPolicy) (written int64, e
 // CopyBuffer is like Copy but stages through buf if needed.
 // If buf is nil, a stack buffer is used.
 // If buf has zero length, CopyBuffer panics.
+//
+// Partial write recovery: same Seeker rollback semantics as Copy. Returns
+// ErrNoSeeker if src is not seekable and a partial write occurs with a
+// semantic error. See Copy documentation for details.
 func CopyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 	if buf != nil && len(buf) == 0 {
 		panic("empty buffer in CopyBuffer")
@@ -45,6 +76,11 @@ func CopyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 //   - nil policy: identical to CopyBuffer
 //   - non-nil: PolicyRetry triggers policy.Yield(op) and a retry; otherwise the
 //     semantic error is returned unchanged.
+//
+// Partial write recovery: same semantics as CopyPolicy. When policy returns
+// PolicyReturn on a partial write, Seeker rollback is attempted; returns
+// ErrNoSeeker if src is not seekable. When policy returns PolicyRetry, the
+// write is retried internally without rollback.
 func CopyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy) (written int64, err error) {
 	if buf != nil && len(buf) == 0 {
 		panic("empty buffer in CopyBufferPolicy")
@@ -195,6 +231,18 @@ func copyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 				written += int64(nw)
 			}
 			if ew != nil {
+				// Attempt Seeker rollback on partial write with semantic error.
+				// This allows the caller to retry without data loss.
+				if nw < nr && IsSemantic(ew) {
+					if seeker, ok := src.(io.Seeker); ok {
+						if _, seekErr := seeker.Seek(int64(nw-nr), io.SeekCurrent); seekErr != nil {
+							return written, seekErr
+						}
+					} else {
+						// Source is not seekable; unwritten bytes are unrecoverable.
+						return written, ErrNoSeeker
+					}
+				}
 				return written, ew
 			}
 			if nw != nr {
@@ -308,12 +356,34 @@ func copyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 							policy.Yield(OpCopyWrite)
 							continue
 						}
+						// Attempt Seeker rollback on partial write when policy returns.
+						if off < nr {
+							if seeker, ok := src.(io.Seeker); ok {
+								if _, seekErr := seeker.Seek(int64(off-nr), io.SeekCurrent); seekErr != nil {
+									return written, seekErr
+								}
+							} else {
+								// Source is not seekable; unwritten bytes are unrecoverable.
+								return written, ErrNoSeeker
+							}
+						}
 						return written, ErrWouldBlock
 					}
 					if ew == ErrMore {
 						if policy.OnMore(OpCopyWrite) == PolicyRetry {
 							policy.Yield(OpCopyWrite)
 							continue
+						}
+						// Attempt Seeker rollback on partial write when policy returns.
+						if off < nr {
+							if seeker, ok := src.(io.Seeker); ok {
+								if _, seekErr := seeker.Seek(int64(off-nr), io.SeekCurrent); seekErr != nil {
+									return written, seekErr
+								}
+							} else {
+								// Source is not seekable; unwritten bytes are unrecoverable.
+								return written, ErrNoSeeker
+							}
 						}
 						return written, ErrMore
 					}

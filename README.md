@@ -48,6 +48,18 @@ Well-behaved Readers should avoid `(0, nil)` except when `len(p) == 0`.
 This avoids hidden spinning inside a helper in non-blocking/event-loop code.
 If you need strict forward-progress detection across repeated `(0, nil)`, implement that policy at your call site.
 
+### Note: `iox.Copy` and partial write recovery
+
+When copying to a non-blocking destination, `dst.Write` may return a semantic error (`ErrWouldBlock` or `ErrMore`) with a partial write (`nw < nr`). In this case, bytes have been read from `src` but not fully written to `dst`.
+
+To prevent data loss, `iox.Copy` attempts to roll back the source pointer:
+- If `src` implements `io.Seeker`, Copy calls `Seek(nw-nr, io.SeekCurrent)` to rewind the unwritten bytes.
+- If `src` does **not** implement `io.Seeker`, Copy returns `ErrNoSeeker` to signal that unwritten bytes are unrecoverable.
+
+**Recommendations:**
+- Use seekable sources (e.g., `*os.File`, `*bytes.Reader`) when copying to non-blocking destinations.
+- For non-seekable sources (e.g., network sockets), use `CopyPolicy` with `PolicyRetry` for write-side semantic errors. This ensures all read bytes are written before returning, avoiding the need for rollback.
+
 ## Quick start
 
 Install with `go get`:
@@ -97,7 +109,7 @@ func main() {
 ## API overview
 
 - Errors
-  - `ErrWouldBlock`, `ErrMore`
+  - `ErrWouldBlock`, `ErrMore`, `ErrNoSeeker`
 
 - Copy
   - `Copy(dst Writer, src Reader) (int64, error)`

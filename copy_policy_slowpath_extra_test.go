@@ -5,6 +5,7 @@
 package iox_test
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -50,7 +51,8 @@ func TestCopyPolicy_SlowPath_WriteWouldBlock_RetryBranch(t *testing.T) {
 }
 
 func TestCopyPolicy_SlowPath_WriteWouldBlock_ReturnBranch(t *testing.T) {
-	src := &simpleReader{s: []byte("zz")}
+	// Use bytes.Reader (implements io.Seeker) so rollback succeeds and ErrWouldBlock is returned.
+	src := bytes.NewReader([]byte("zz"))
 	dst := &wbOnceThenOK{}
 	// Return on writer would-block
 	pol := &recPolicy{onWB: map[iox.Op]iox.PolicyAction{iox.OpCopyWrite: iox.PolicyReturn}}

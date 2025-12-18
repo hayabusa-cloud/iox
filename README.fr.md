@@ -48,6 +48,18 @@ Les Readers bien comportés devraient éviter `(0, nil)` sauf lorsque `len(p) ==
 Cela évite de cacher du spinning dans un helper en code non bloquant / event-loop.
 Si vous avez besoin d’une détection stricte du forward progress malgré des `(0, nil)` répétés, implémentez cette politique au niveau du call site.
 
+### Note : `iox.Copy` et récupération d'écriture partielle
+
+Lors de la copie vers une destination non bloquante, `dst.Write` peut retourner une erreur sémantique (`ErrWouldBlock` ou `ErrMore`) avec une écriture partielle (`nw < nr`). Dans ce cas, les octets ont été lus depuis `src` mais pas entièrement écrits vers `dst`.
+
+Pour éviter la perte de données, `iox.Copy` tente de rembobiner le pointeur source :
+- Si `src` implémente `io.Seeker`, Copy appelle `Seek(nw-nr, io.SeekCurrent)` pour rembobiner les octets non écrits.
+- Si `src` n'implémente **pas** `io.Seeker`, Copy retourne `ErrNoSeeker` pour signaler que les octets non écrits sont irrécupérables.
+
+**Recommandations :**
+- Utilisez des sources seekables (p. ex., `*os.File`, `*bytes.Reader`) lors de la copie vers des destinations non bloquantes.
+- Pour les sources non seekables (p. ex., sockets réseau), utilisez `CopyPolicy` avec `PolicyRetry` pour les erreurs sémantiques côté écriture. Cela garantit que tous les octets lus sont écrits avant le retour, évitant le besoin de rollback.
+
 ## Démarrage rapide
 
 Installer avec `go get` :
@@ -98,7 +110,7 @@ func main() {
 ## Aperçu de l’API
 
 - Errors
-  - `ErrWouldBlock`, `ErrMore`
+  - `ErrWouldBlock`, `ErrMore`, `ErrNoSeeker`
 
 - Copy
   - `Copy(dst Writer, src Reader) (int64, error)`

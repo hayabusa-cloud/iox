@@ -26,3 +26,14 @@ var ErrWouldBlock = errors.New("io: would block")
 // (multi-shot / streaming style).
 // Next step: keep polling and processing results.
 var ErrMore = errors.New("io: expect more")
+
+// ErrNoSeeker is returned by Copy helpers when a partial write occurs with a
+// semantic error (ErrWouldBlock or ErrMore) and the source does not implement
+// io.Seeker. Without Seek capability, the unwritten bytes in the transient
+// buffer cannot be recovered, resulting in data loss.
+//
+// To avoid this error:
+//   - Use a seekable source (e.g., *os.File, *bytes.Reader).
+//   - Use CopyPolicy with PolicyRetry to ensure all read bytes are written
+//     before returning.
+var ErrNoSeeker = errors.New("io: source is not seekable; partial write unrecoverable")
