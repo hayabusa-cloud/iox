@@ -132,6 +132,51 @@ func main() {
   - `IsMore(err error) bool`
   - `IsProgress(err error) bool`
 
+- Backoff
+  - `Backoff` — retroceso adaptativo para espera de I/O externa
+  - `DefaultBackoffBase` (500µs), `DefaultBackoffMax` (100ms)
+
+## Backoff — Espera Adaptativa para I/O Externa
+
+Cuando `ErrWouldBlock` señala que no es posible progresar, el llamador debe esperar antes de reintentar. `iox.Backoff` proporciona una estrategia de retroceso adaptativo para esta espera.
+
+**Modelo de Progreso de Tres Niveles:**
+
+| Nivel | Mecanismo | Caso de Uso |
+|-------|-----------|-------------|
+| Strike | Llamada al sistema | Golpe directo al kernel |
+| Spin | Yield de hardware (`spin`) | Sincronización atómica local |
+| **Adapt** | Retroceso software (`iox.Backoff`) | Readiness de I/O externa |
+
+**Valor cero listo para usar:**
+
+```go
+var b iox.Backoff  // usa DefaultBackoffBase (500µs) y DefaultBackoffMax (100ms)
+
+for {
+    n, err := conn.Read(buf)
+    if err == iox.ErrWouldBlock {
+        b.Wait()  // sleep adaptativo con jitter
+        continue
+    }
+    if err != nil {
+        return err
+    }
+    process(buf[:n])
+    b.Reset()  // resetear tras progreso exitoso
+}
+```
+
+**Algoritmo:** Escalado lineal basado en bloques con ±12.5% de jitter para prevenir thundering herds.
+- Bloque 1: 1 sleep de `base`
+- Bloque 2: 2 sleeps de `2×base`
+- Bloque n: n sleeps de `min(n×base, max)`
+
+**Métodos:**
+- `Wait()` — duerme la duración actual, luego avanza
+- `Reset()` — restaura al bloque 1
+- `SetBase(d)` / `SetMax(d)` — configurar tiempos
+
 ## Semántica de Tee (conteos y errores)
 
 - `TeeReader` devuelve `n` como el número de bytes leídos desde `r` (progreso del origen), incluso si la escritura al side falla/es corta.
