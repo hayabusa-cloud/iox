@@ -177,3 +177,37 @@ func TestBackoff_Reset(t *testing.T) {
 		t.Errorf("Reset failed")
 	}
 }
+
+func TestBackoff_WaitMaxCap(t *testing.T) {
+	// This test exercises the capping branch in Wait() (lines 60-62 of backoff.go).
+	// We set base=10ms and max=15ms, so:
+	//   Block 1: d = 10ms (no cap)
+	//   Block 2: d = 20ms > 15ms → capped to 15ms
+	var b iox.Backoff
+	b.SetBase(10 * time.Millisecond)
+	b.SetMax(15 * time.Millisecond)
+
+	// Block 1: 1 iteration, d = 10ms (under max)
+	b.Wait()
+
+	// Now in block 2: d = 20ms, should be capped to 15ms
+	// Call Wait() to exercise the capping branch inside Wait()
+	start := time.Now()
+	b.Wait()
+	elapsed := time.Since(start)
+
+	// Should have waited approximately 15ms (capped) ± jitter
+	// Allow generous tolerance for OS scheduling
+	minWait := 10 * time.Millisecond  // allow some slack below
+	maxWait := 500 * time.Millisecond // generous upper bound for CI
+
+	if elapsed < minWait || elapsed > maxWait {
+		t.Errorf("Wait() with cap: elapsed = %v, expected between %v and %v", elapsed, minWait, maxWait)
+	}
+
+	// Verify we're now in block 2 (after 2 waits in block 2, we'd be in block 3)
+	// After 1 wait in block 2, we should still be in block 2
+	if got := b.Block(); got != 2 {
+		t.Errorf("After capped Wait(), Block() = %d, want 2", got)
+	}
+}
