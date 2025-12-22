@@ -131,6 +131,51 @@ func main() {
   - `IsMore(err error) bool`
   - `IsProgress(err error) bool`
 
+- Backoff
+  - `Backoff` — adaptive back-off for external I/O waiting
+  - `DefaultBackoffBase` (500µs), `DefaultBackoffMax` (100ms)
+
+## Backoff — Adaptive Waiting for External I/O
+
+When `ErrWouldBlock` signals that no progress is possible, the caller must wait before retrying. `iox.Backoff` provides an adaptive back-off strategy for this waiting.
+
+**Three-Tier Progress Model:**
+
+| Tier | Mechanism                        | Use Case |
+|------|----------------------------------|----------|
+| Strike | System call                      | Direct kernel hit |
+| Spin | Hardware yield (`spin`)          | Local atomic synchronization |
+| **Adapt** | Software backoff (`iox.Backoff`) | External I/O readiness |
+
+**Zero-value ready to use:**
+
+```go
+var b iox.Backoff  // uses DefaultBackoffBase (500µs) and DefaultBackoffMax (100ms)
+
+for {
+    n, err := conn.Read(buf)
+    if err == iox.ErrWouldBlock {
+        b.Wait()  // adaptive sleep with jitter
+        continue
+    }
+    if err != nil {
+        return err
+    }
+    process(buf[:n])
+    b.Reset()  // reset on successful progress
+}
+```
+
+**Algorithm:** Block-based linear scaling with ±12.5% jitter to prevent thundering herds.
+- Block 1: 1 sleep of `base`
+- Block 2: 2 sleeps of `2×base`
+- Block n: n sleeps of `min(n×base, max)`
+
+**Methods:**
+- `Wait()` — sleep for the current duration, then advance
+- `Reset()` — restore to block 1
+- `SetBase(d)` / `SetMax(d)` — configure timing
+
 ## Tee semantics (counts and errors)
 
 - `TeeReader` returns `n` as the number of bytes read from `r` (source progress), even if the side write fails/is short.

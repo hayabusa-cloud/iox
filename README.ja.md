@@ -132,6 +132,51 @@ func main() {
   - `IsMore(err error) bool`
   - `IsProgress(err error) bool`
 
+- Backoff
+  - `Backoff` — 外部 I/O 待機のための適応型バックオフ
+  - `DefaultBackoffBase` (500µs)、`DefaultBackoffMax` (100ms)
+
+## Backoff — 外部 I/O のための適応型待機
+
+`ErrWouldBlock` が進捗不可を示した場合、呼び出し側は再試行前に待機する必要があります。`iox.Backoff` はこの待機のための適応型バックオフ戦略を提供します。
+
+**三層進捗モデル：**
+
+| 層 | メカニズム | ユースケース |
+|----|------------|--------------|
+| Strike | システムコール | カーネル直撃 |
+| Spin | ハードウェア yield (`spin`) | ローカル atomic 同期 |
+| **Adapt** | ソフトウェアバックオフ (`iox.Backoff`) | 外部 I/O readiness |
+
+**ゼロ値ですぐ使用可能：**
+
+```go
+var b iox.Backoff  // DefaultBackoffBase (500µs) と DefaultBackoffMax (100ms) を使用
+
+for {
+    n, err := conn.Read(buf)
+    if err == iox.ErrWouldBlock {
+        b.Wait()  // ジッター付き適応型スリープ
+        continue
+    }
+    if err != nil {
+        return err
+    }
+    process(buf[:n])
+    b.Reset()  // 進捗成功後にリセット
+}
+```
+
+**アルゴリズム：** ブロックベースの線形スケーリング、±12.5% のジッター付き（thundering herd 防止）。
+- ブロック 1: `base` 時間のスリープ 1 回
+- ブロック 2: `2×base` 時間のスリープ 2 回
+- ブロック n: `min(n×base, max)` 時間のスリープ n 回
+
+**メソッド：**
+- `Wait()` — 現在の時間だけスリープし、次へ進む
+- `Reset()` — ブロック 1 に戻す
+- `SetBase(d)` / `SetMax(d)` — タイミング設定
+
 ## Tee のセマンティクス（count と error）
 
 - `TeeReader` は `n` を `r` から読めたバイト数（source progress）として返します。side write が失敗/short でも `n` は変わりません。

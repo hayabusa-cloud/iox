@@ -132,6 +132,51 @@ func main() {
   - `IsMore(err error) bool`
   - `IsProgress(err error) bool`
 
+- Backoff
+  - `Backoff` — 用于外部 I/O 等待的自适应退避
+  - `DefaultBackoffBase` (500µs)、`DefaultBackoffMax` (100ms)
+
+## Backoff — 外部 I/O 的自适应等待
+
+当 `ErrWouldBlock` 表示当前无法取得进展时，调用方必须等待后再重试。`iox.Backoff` 为此提供自适应退避策略。
+
+**三层进展模型：**
+
+| 层级 | 机制 | 使用场景 |
+|------|------|----------|
+| Strike | 系统调用 | 直接内核命中 |
+| Spin | 硬件让步 (`spin`) | 本地原子同步 |
+| **Adapt** | 软件退避 (`iox.Backoff`) | 外部 I/O 就绪 |
+
+**零值即可使用：**
+
+```go
+var b iox.Backoff  // 使用 DefaultBackoffBase (500µs) 和 DefaultBackoffMax (100ms)
+
+for {
+    n, err := conn.Read(buf)
+    if err == iox.ErrWouldBlock {
+        b.Wait()  // 带抖动的自适应睡眠
+        continue
+    }
+    if err != nil {
+        return err
+    }
+    process(buf[:n])
+    b.Reset()  // 成功进展后重置
+}
+```
+
+**算法：** 基于块的线性扩展，带 ±12.5% 抖动以防止惊群效应。
+- 块 1：1 次 `base` 时长的睡眠
+- 块 2：2 次 `2×base` 时长的睡眠
+- 块 n：n 次 `min(n×base, max)` 时长的睡眠
+
+**方法：**
+- `Wait()` — 按当前时长睡眠，然后推进
+- `Reset()` — 恢复到块 1
+- `SetBase(d)` / `SetMax(d)` — 配置时间参数
+
 ## Tee 语义（计数与错误）
 
 - `TeeReader` 的 `n` 表示从 `r` 读出的字节数（source progress），即使 side 写入失败/短写也不会改变 `n`。
