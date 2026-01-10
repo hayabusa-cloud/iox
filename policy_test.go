@@ -24,6 +24,7 @@ type recPolicy struct {
 	onMore map[iox.Op]iox.PolicyAction
 	yields []iox.Op
 }
+
 func (p *recPolicy) Yield(op iox.Op) { p.yields = append(p.yields, op) }
 func (p *recPolicy) OnWouldBlock(op iox.Op) iox.PolicyAction {
 	if p.onWB != nil {
@@ -41,6 +42,7 @@ func (p *recPolicy) OnMore(op iox.Op) iox.PolicyAction {
 	}
 	return iox.PolicyReturn
 }
+
 // scriptedWT implements iox.Reader with WriterTo fast path producing a scripted
 // sequence of (n, err) results. For each call it writes n bytes into dst.
 type scriptedWT struct {
@@ -50,6 +52,7 @@ type scriptedWT struct {
 	}
 	i int
 }
+
 func (scriptedWT) Read(p []byte) (int, error) { return 0, io.EOF }
 func (s *scriptedWT) WriteTo(dst iox.Writer) (int64, error) {
 	if s.i >= len(s.seq) {
@@ -64,6 +67,7 @@ func (s *scriptedWT) WriteTo(dst iox.Writer) (int64, error) {
 	}
 	return 0, st.err
 }
+
 // scriptedRF implements iox.Writer with ReaderFrom fast path producing a scripted
 // sequence of (n, err) results. It ignores the src and returns scripted results.
 type scriptedRF struct {
@@ -73,6 +77,7 @@ type scriptedRF struct {
 	}
 	i int
 }
+
 func (scriptedRF) Write(p []byte) (int, error) { return len(p), nil }
 func (s *scriptedRF) ReadFrom(src iox.Reader) (int64, error) {
 	if s.i >= len(s.seq) {
@@ -168,6 +173,7 @@ func TestCopyPolicy_ReaderFrom_WouldBlock_RetryCompletes(t *testing.T) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
+
 // Duplicate ReaderFrom fast-path More case is covered in copy_policy_misc_test.go.
 func TestCopyPolicy_SlowPath_WriteShortZeroIsErrShortWrite(t *testing.T) {
 	r := &simpleReader{s: []byte("abc")}
@@ -193,11 +199,13 @@ func TestCopyPolicy_SlowPath_ReadWouldBlock_RetryThenOK(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, string(dst.data))
 	}
 }
+
 // wtWBOnce implements Reader and WriterTo; first WriteTo would-block, then writes all.
 type wtWBOnce struct {
 	data     []byte
 	attempts int
 }
+
 func (w *wtWBOnce) Read(p []byte) (int, error) {
 	// basic Reader to satisfy the Reader type; unused in fast path
 	if len(w.data) == 0 {
@@ -226,8 +234,10 @@ func TestCopyPolicy_WriterToFastPath_RetryOnWouldBlock_Completes(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, dst.String())
 	}
 }
+
 // wtEOF returns data with io.EOF; CopyPolicy must map to nil and return total.
 type wtEOF struct{ data []byte }
+
 func (w wtEOF) Read(p []byte) (int, error) { return 0, iox.EOF }
 func (w wtEOF) WriteTo(dst iox.Writer) (int64, error) {
 	n, _ := dst.Write(w.data)
@@ -241,8 +251,10 @@ func TestCopyPolicy_WriterToFastPath_EOFMapsToNil(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, dst.String())
 	}
 }
+
 // wtWB returns ErrWouldBlock immediately; with ReturnPolicy it should return WB.
 type wtWB struct{}
+
 func (wtWB) Read(p []byte) (int, error)        { return 0, iox.EOF }
 func (wtWB) WriteTo(iox.Writer) (int64, error) { return 0, iox.ErrWouldBlock }
 func TestCopyPolicy_WriterToFastPath_WouldBlock_ReturnPolicy(t *testing.T) {
@@ -251,11 +263,13 @@ func TestCopyPolicy_WriterToFastPath_WouldBlock_ReturnPolicy(t *testing.T) {
 		t.Fatalf("want WouldBlock, got n=%d err=%v", n, err)
 	}
 }
+
 // wtMoreThenOK returns More once, then writes on retry.
 type wtMoreThenOK struct {
 	data  []byte
 	state int
 }
+
 func (w *wtMoreThenOK) Read(p []byte) (int, error) { return 0, iox.EOF }
 func (w *wtMoreThenOK) WriteTo(dst iox.Writer) (int64, error) {
 	if w.state == 0 {
@@ -274,11 +288,13 @@ func TestCopyPolicy_WriterToFastPath_MoreRetryThenOK(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, dst.String())
 	}
 }
+
 // rfWBOnce implements Writer and ReaderFrom; first ReadFrom would-block, then drains src.
 type rfWBOnce struct {
 	attempts int
 	buf      bytes.Buffer
 }
+
 func (w *rfWBOnce) Write(p []byte) (int, error) { return w.buf.Write(p) }
 func (w *rfWBOnce) ReadFrom(src iox.Reader) (int64, error) {
 	if w.attempts == 0 {
@@ -310,13 +326,16 @@ func TestCopyPolicy_ReaderFromFastPath_RetryOnWouldBlock_Completes(t *testing.T)
 		t.Fatalf("n=%d err=%v dst=%q", n, err, dst.buf.String())
 	}
 }
+
 // simpleReader implements Reader only (no WriterTo) to force ReaderFrom fast path.
 type simpleReader struct {
 	s   []byte
 	off int
 }
+
 // rfEOF returns (n, EOF); CopyPolicy must map to nil and return total.
 type rfEOF struct{}
+
 func (rfEOF) Write(p []byte) (int, error)            { return len(p), nil }
 func (rfEOF) ReadFrom(src iox.Reader) (int64, error) { return 5, iox.EOF }
 func TestCopyPolicy_ReaderFromFastPath_EOFMapsToNil(t *testing.T) {
@@ -326,8 +345,10 @@ func TestCopyPolicy_ReaderFromFastPath_EOFMapsToNil(t *testing.T) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
+
 // rfWB returns WouldBlock; ReturnPolicy should return WB.
 type rfWB struct{}
+
 func (rfWB) Write(p []byte) (int, error)        { return len(p), nil }
 func (rfWB) ReadFrom(iox.Reader) (int64, error) { return 0, iox.ErrWouldBlock }
 func TestCopyPolicy_ReaderFromFastPath_WouldBlock_ReturnPolicy(t *testing.T) {
@@ -336,8 +357,10 @@ func TestCopyPolicy_ReaderFromFastPath_WouldBlock_ReturnPolicy(t *testing.T) {
 		t.Fatalf("want WouldBlock, got n=%d err=%v", n, err)
 	}
 }
+
 // rfMoreThenOK returns More once then drains.
 type rfMoreThenOK struct{ state int }
+
 func (rfMoreThenOK) Write(p []byte) (int, error) { return len(p), nil }
 func (r *rfMoreThenOK) ReadFrom(src iox.Reader) (int64, error) {
 	if r.state == 0 {
@@ -409,8 +432,10 @@ func TestCopyNPolicy_ExactN_UsingPolicyPath(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, dst.String())
 	}
 }
+
 // wtMoreOnce triggers policy OnMore fast-path branch.
 type wtMoreOnce struct{}
+
 func (wtMoreOnce) Read(p []byte) (int, error)        { return 0, iox.EOF }
 func (wtMoreOnce) WriteTo(iox.Writer) (int64, error) { return 0, iox.ErrMore }
 func TestCopyPolicy_WriterToFastPath_More_Returns(t *testing.T) {
@@ -420,8 +445,10 @@ func TestCopyPolicy_WriterToFastPath_More_Returns(t *testing.T) {
 		t.Fatalf("want More from WriterTo fast path: n=%d err=%v", n, err)
 	}
 }
+
 // rfMoreOnce triggers policy OnMore fast-path branch for ReaderFrom.
 type rfMoreOnce struct{}
+
 func (rfMoreOnce) Write(p []byte) (int, error)        { return len(p), nil }
 func (rfMoreOnce) ReadFrom(iox.Reader) (int64, error) { return 0, iox.ErrMore }
 func TestCopyPolicy_ReaderFromFastPath_More_Returns(t *testing.T) {
@@ -474,7 +501,9 @@ func TestCopyPolicy_ImmediateEOF_Nil(t *testing.T) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
+
 type zeroThenNilReader2 struct{ called bool }
+
 func (r *zeroThenNilReader2) Read(p []byte) (int, error) {
 	if !r.called {
 		r.called = true
@@ -489,11 +518,13 @@ func TestCopyPolicy_ZeroThenNil_Returns(t *testing.T) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
+
 // writerMoreOnce writes k bytes then returns ErrMore.
 type writerMoreOnce struct {
 	k   int
 	buf bytes.Buffer
 }
+
 func (w *writerMoreOnce) Write(p []byte) (int, error) {
 	if w.k <= 0 {
 		return 0, iox.ErrMore
@@ -543,8 +574,10 @@ func TestPolicy_YieldMethods_NoOpCoverage(t *testing.T) {
 	var ywp iox.YieldOnWriteWouldBlockPolicy
 	ywp.Yield(iox.OpCopyWrite)
 }
+
 // wbOnceThenOK writer returns (0, ErrWouldBlock) once, then writes all.
 type wbOnceThenOK struct{ once bool }
+
 func (w *wbOnceThenOK) Write(p []byte) (int, error) {
 	if !w.once {
 		w.once = true
@@ -552,10 +585,12 @@ func (w *wbOnceThenOK) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
 // errAfterN writer writes up to n bytes then returns a generic error.
 type errAfterN struct {
 	left int
 }
+
 func (w *errAfterN) Write(p []byte) (int, error) {
 	if w.left <= 0 {
 		return 0, errors.New("boom")
@@ -595,10 +630,14 @@ func TestCopyPolicy_SlowPath_WriteGenericError_AfterProgress(t *testing.T) {
 		t.Fatalf("want (1, boom) got (%d, %v)", n, err)
 	}
 }
+
 // Readers to hit read-side return branches without fast paths.
 type zeroWBReader struct{}
+
 func (zeroWBReader) Read([]byte) (int, error) { return 0, iox.ErrWouldBlock }
+
 type zeroMoreThenEOFReader struct{ once bool }
+
 func (r *zeroMoreThenEOFReader) Read([]byte) (int, error) {
 	if !r.once {
 		r.once = true
@@ -695,14 +734,18 @@ func TestPolicyFunc_DefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("PolicyFunc overrides not invoked: yield=%v wb=%v more=%v", gotYield, gotWB, gotMore)
 	}
 }
+
 // errReaderAlwaysWB returns ErrWouldBlock on every Read.
 type errReaderAlwaysWB struct{}
+
 func (errReaderAlwaysWB) Read(p []byte) (int, error) { return 0, iox.ErrWouldBlock }
+
 // wbThenDataReader yields ErrWouldBlock once, then returns data and EOF.
 type wbThenDataReader struct {
 	state int
 	data  []byte
 }
+
 func (r *wbThenDataReader) Read(p []byte) (int, error) {
 	if r.state == 0 {
 		r.state = 1
@@ -718,11 +761,13 @@ func (r *wbThenDataReader) Read(p []byte) (int, error) {
 	}
 	return n, nil
 }
+
 // wouldBlockOnceWriter returns ErrWouldBlock once, then writes all.
 type wouldBlockOnceWriter struct {
 	wb  bool
 	buf bytes.Buffer
 }
+
 func (w *wouldBlockOnceWriter) Write(p []byte) (int, error) {
 	if !w.wb {
 		w.wb = true
@@ -731,12 +776,14 @@ func (w *wouldBlockOnceWriter) Write(p []byte) (int, error) {
 	n, _ := w.buf.Write(p)
 	return n, nil
 }
+
 // partialThenWBWriter writes k bytes then ErrWouldBlock; next call writes rest.
 type partialThenWBWriter struct {
 	once bool
 	k    int
 	buf  bytes.Buffer
 }
+
 func (w *partialThenWBWriter) Write(p []byte) (int, error) {
 	if !w.once {
 		w.once = true

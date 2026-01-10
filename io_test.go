@@ -19,8 +19,11 @@ import (
 
 // Helpers
 type errReader struct{ err error }
+
 func (e errReader) Read(p []byte) (int, error) { return 0, e.err }
+
 type zeroThenNilReader struct{ called bool }
+
 func (r *zeroThenNilReader) Read(p []byte) (int, error) {
 	if r.called {
 		return 0, iox.EOF
@@ -28,6 +31,7 @@ func (r *zeroThenNilReader) Read(p []byte) (int, error) {
 	r.called = true
 	return 0, nil
 }
+
 type scriptedReader struct {
 	steps []struct {
 		b   []byte
@@ -35,6 +39,7 @@ type scriptedReader struct {
 	}
 	i int
 }
+
 func (s *scriptedReader) Read(p []byte) (int, error) {
 	if s.i >= len(s.steps) {
 		return 0, iox.EOF
@@ -47,7 +52,9 @@ func (s *scriptedReader) Read(p []byte) (int, error) {
 	}
 	return 0, st.err
 }
+
 type shortWriter struct{ limit int }
+
 func (w shortWriter) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -61,10 +68,12 @@ func (w shortWriter) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
+
 type errWriter struct {
 	n   int
 	err error
 }
+
 func (w errWriter) Write(p []byte) (int, error) {
 	n := w.n
 	if n > len(p) {
@@ -75,16 +84,22 @@ func (w errWriter) Write(p []byte) (int, error) {
 	}
 	return n, w.err
 }
+
 // simple writer without ReaderFrom
 type sliceWriter struct{ data []byte }
+
 func (w *sliceWriter) Write(p []byte) (int, error) { w.data = append(w.data, p...); return len(p), nil }
+
 // writer returning 0, nil to trigger short write branch with nw==0
 type shortZeroWriter struct{}
+
 func (shortZeroWriter) Write(p []byte) (int, error) { return 0, nil }
+
 type wtReader struct {
 	n   int64
 	err error
 }
+
 func (r wtReader) Read(p []byte) (int, error) { return 0, errors.New("unexpected Read call") }
 func (r wtReader) WriteTo(w iox.Writer) (int64, error) {
 	if r.n > 0 {
@@ -94,26 +109,36 @@ func (r wtReader) WriteTo(w iox.Writer) (int64, error) {
 	}
 	return 0, r.err
 }
+
 type rfWriter struct {
 	n   int64
 	err error
 }
-func (w rfWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+func (w rfWriter) Write(p []byte) (int, error)          { return len(p), nil }
 func (w rfWriter) ReadFrom(r iox.Reader) (int64, error) { return w.n, w.err }
+
 type noWTReader struct{ r *bytes.Reader }
+
 func (r noWTReader) Read(p []byte) (int, error) { return r.r.Read(p) }
+
 // ReaderFrom variants used to drive CopyN post-conditions.
 type rfShortNil struct{}
+
 func (rfShortNil) Write(p []byte) (int, error)          { return len(p), nil }
 func (rfShortNil) ReadFrom(r iox.Reader) (int64, error) { return 3, nil }
+
 type rfShortEOF struct{}
+
 func (rfShortEOF) Write(p []byte) (int, error)          { return len(p), nil }
 func (rfShortEOF) ReadFrom(r iox.Reader) (int64, error) { return 4, iox.EOF }
+
 type dataThenErrReader struct {
 	data []byte
 	err  error
 	used bool
 }
+
 func (r *dataThenErrReader) Read(p []byte) (int, error) {
 	if r.used {
 		return 0, iox.EOF
@@ -122,8 +147,10 @@ func (r *dataThenErrReader) Read(p []byte) (int, error) {
 	n := copy(p, r.data)
 	return n, r.err
 }
+
 // A ReaderFrom that actually consumes from the supplied reader, to exercise limitedReader.
 type rfConsume struct{}
+
 func (rfConsume) Write(p []byte) (int, error) { return len(p), nil }
 func (rfConsume) ReadFrom(r iox.Reader) (int64, error) {
 	var buf [7]byte
@@ -141,6 +168,7 @@ func (rfConsume) ReadFrom(r iox.Reader) (int64, error) {
 		}
 	}
 }
+
 // Tests
 func TestCopy_StdEOF(t *testing.T) {
 	src := bytes.NewBufferString("hello")
@@ -477,7 +505,9 @@ func TestCopy_OtherErrNoData(t *testing.T) {
 		t.Fatalf("n=%d", n)
 	}
 }
+
 type errZeroWriter struct{ err error }
+
 func (w errZeroWriter) Write(p []byte) (int, error) { return 0, w.err }
 func TestCopy_WriteErrorZeroBytes(t *testing.T) {
 	s := &scriptedReader{steps: []struct {
@@ -679,6 +709,7 @@ func TestCopyN_ZeroOrNegN(t *testing.T) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
+
 // dataThenErrReader is provided in other test files in this package.
 func TestAsWriterTo_WriteTo_PropagatesErrMore(t *testing.T) {
 	src := &dataThenErrReader{data: []byte("ab"), err: iox.ErrMore}
@@ -704,6 +735,7 @@ func TestAsReaderFrom_ReadFrom_PropagatesErrWouldBlock(t *testing.T) {
 		t.Fatalf("n=%d primary=%q", n, primary.String())
 	}
 }
+
 // teeWriter: special errors (ErrMore) are propagated unchanged.
 func TestTeeWriter_TeeErrMore_Propagated(t *testing.T) {
 	var primary bytes.Buffer
@@ -732,8 +764,10 @@ func TestTeeWriter_TeeWouldBlock_Propagated(t *testing.T) {
 		t.Fatalf("n=%d primary=%q", n, primary.String())
 	}
 }
+
 // Helper writer that accepts all bytes and returns the provided error.
 type errThenCountWriter struct{ err error }
+
 func (w errThenCountWriter) Write(p []byte) (int, error) {
 	return len(p), w.err
 }
@@ -759,6 +793,7 @@ func TestCopyNBuffer_PanicOnEmpty(t *testing.T) {
 	var dst bytes.Buffer
 	_, _ = iox.CopyNBuffer(&dst, src, 2, make([]byte, 0))
 }
+
 // cover fast path of CopyNBuffer via ReaderFrom
 func TestCopyNBuffer_ReaderFromFastPath(t *testing.T) {
 	src := bytes.NewBufferString("ignored")
@@ -787,7 +822,9 @@ func TestAdapters_WriterToAdapter_Read(t *testing.T) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
+
 type captureWriter struct{ b bytes.Buffer }
+
 func (w *captureWriter) Write(p []byte) (int, error) { return w.b.Write(p) }
 func TestAdapters_ReaderFromAdapter_ReadFrom(t *testing.T) {
 	cw := &captureWriter{}
@@ -814,8 +851,10 @@ func TestTeeReader_ZeroThenNil(t *testing.T) {
 		t.Fatalf("n=%d side=%d", n, side.Len())
 	}
 }
+
 // teeWriter: tee short write
 type shortTee struct{}
+
 func (shortTee) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -837,11 +876,15 @@ func TestTeeWriter_TeeShortWrite(t *testing.T) {
 		t.Fatalf("primary=%q", p.String())
 	}
 }
+
 // additional helpers and tests
 type rfN struct{ n int64 }
+
 func (rfN) Write(p []byte) (int, error)            { return len(p), nil }
 func (w rfN) ReadFrom(r iox.Reader) (int64, error) { return w.n, nil }
+
 type shortSideWriter struct{}
+
 func (shortSideWriter) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -917,6 +960,7 @@ func TestCopyNBuffer_SpecialErrors(t *testing.T) {
 		t.Fatalf("n=%d", n)
 	}
 }
+
 // =============================================================================
 // Mock types for coverage expansion
 // =============================================================================
@@ -926,6 +970,7 @@ type failingSeeker struct {
 	pos     int
 	seekErr error
 }
+
 func (f *failingSeeker) Read(p []byte) (int, error) {
 	if f.pos >= len(f.data) {
 		return 0, io.EOF
@@ -937,12 +982,14 @@ func (f *failingSeeker) Read(p []byte) (int, error) {
 func (f *failingSeeker) Seek(offset int64, whence int) (int64, error) {
 	return 0, f.seekErr
 }
+
 // partialWBWriter writes partial data and returns ErrWouldBlock.
 // It writes exactly `partial` bytes, then returns ErrWouldBlock.
 type partialWBWriter struct {
 	partial int
 	buf     []byte
 }
+
 func (w *partialWBWriter) Write(p []byte) (int, error) {
 	if w.partial <= 0 {
 		return 0, iox.ErrWouldBlock
@@ -955,11 +1002,13 @@ func (w *partialWBWriter) Write(p []byte) (int, error) {
 	w.partial = 0
 	return n, iox.ErrWouldBlock
 }
+
 // partialMoreWriter writes partial data and returns ErrMore.
 type partialMoreWriter struct {
 	partial int
 	buf     []byte
 }
+
 func (w *partialMoreWriter) Write(p []byte) (int, error) {
 	if w.partial <= 0 {
 		return 0, iox.ErrMore
@@ -972,11 +1021,13 @@ func (w *partialMoreWriter) Write(p []byte) (int, error) {
 	w.partial = 0
 	return n, iox.ErrMore
 }
+
 // plainReader is a simple Reader that does NOT implement Seeker.
 type plainReader struct {
 	data []byte
 	pos  int
 }
+
 func (r *plainReader) Read(p []byte) (int, error) {
 	if r.pos >= len(r.data) {
 		return 0, io.EOF
@@ -985,6 +1036,7 @@ func (r *plainReader) Read(p []byte) (int, error) {
 	r.pos += n
 	return n, nil
 }
+
 // =============================================================================
 // Test: Seeker Rollback Failures in copyBuffer
 // =============================================================================
@@ -1018,6 +1070,7 @@ func TestCopy_SeekerRollbackFailure_ErrMore(t *testing.T) {
 		}
 	})
 }
+
 // =============================================================================
 // Test: ErrNoSeeker Propagation in copyBuffer
 // =============================================================================
@@ -1047,6 +1100,7 @@ func TestCopy_ErrNoSeeker_ErrMore(t *testing.T) {
 		}
 	})
 }
+
 // =============================================================================
 // Test: copyBufferPolicy Seeker Rollback with PolicyReturn
 // =============================================================================
@@ -1082,6 +1136,7 @@ func TestCopyPolicy_SeekerRollbackFailure_ErrMore(t *testing.T) {
 		}
 	})
 }
+
 // =============================================================================
 // Test: copyBufferPolicy ErrNoSeeker with PolicyReturn
 // =============================================================================
@@ -1113,6 +1168,7 @@ func TestCopyPolicy_ErrNoSeeker_ErrMore(t *testing.T) {
 		}
 	})
 }
+
 // =============================================================================
 // Test: copyBufferPolicy Seeker Rollback Success (returns semantic error)
 // =============================================================================
@@ -1121,6 +1177,7 @@ type workingSeeker struct {
 	data []byte
 	pos  int
 }
+
 func (s *workingSeeker) Read(p []byte) (int, error) {
 	if s.pos >= len(s.data) {
 		return 0, io.EOF
@@ -1184,6 +1241,7 @@ func TestCopyPolicy_SeekerRollbackSuccess_ErrMore(t *testing.T) {
 		}
 	})
 }
+
 // dataThenErrReader returns all data in the first call and then returns err
 // with the same call (n>0, err!=nil). Subsequent calls return EOF.
 type dataThenErrReader2 struct {
@@ -1191,6 +1249,7 @@ type dataThenErrReader2 struct {
 	err  error
 	done bool
 }
+
 func (r *dataThenErrReader2) Read(p []byte) (int, error) {
 	if r.done {
 		return 0, iox.EOF
@@ -1199,11 +1258,13 @@ func (r *dataThenErrReader2) Read(p []byte) (int, error) {
 	n := copy(p, r.data)
 	return n, r.err
 }
+
 // zeroThenEOFReader returns (0, ErrWouldBlock|ErrMore) first, then EOF.
 type zeroThenEOFReader struct {
 	err error
 	hit bool
 }
+
 func (r *zeroThenEOFReader) Read([]byte) (int, error) {
 	if !r.hit {
 		r.hit = true
@@ -1211,9 +1272,12 @@ func (r *zeroThenEOFReader) Read([]byte) (int, error) {
 	}
 	return 0, iox.EOF
 }
+
 // errReader returns a configured error without producing data.
 type errOnlyReader2 struct{ err error }
+
 func (r errOnlyReader2) Read([]byte) (int, error) { return 0, r.err }
+
 // ----- Small, targeted coverage tests -----
 func TestCopyBufferPolicy_NilPolicy_Delegates(t *testing.T) {
 	var dst bytes.Buffer
@@ -1280,6 +1344,7 @@ func TestCopyPolicy_ReadZero_WouldBlock_RetryThenEOF(t *testing.T) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
+
 // Slow-path zero-read semantic branches (avoid fast-path by using sliceWriter)
 func TestCopyPolicy_SlowPath_ReadZeroWouldBlock_RetryThenEOF(t *testing.T) {
 	var dst sliceWriter
@@ -1315,6 +1380,7 @@ func TestCopyPolicy_SlowPath_ReadZeroMore_Returns(t *testing.T) {
 		t.Fatalf("n=%d err=%v dstlen=%d", n, err, len(dst.data))
 	}
 }
+
 // Slow-path variants to ensure copyBufferPolicy branches are hit (avoid ReaderFrom fast-path)
 func TestCopyPolicy_SlowPath_ReadSide_More_Returns(t *testing.T) {
 	var dst sliceWriter
@@ -1332,6 +1398,7 @@ func TestCopyPolicy_SlowPath_ReadSide_WouldBlock_Returns(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, string(dst.data))
 	}
 }
+
 // --- copyBufferPolicy: n==0 semantic retry followed by progress ---
 // seqReader yields (0, err1) then (n>0, nil) once.
 type seqReader struct {
@@ -1339,6 +1406,7 @@ type seqReader struct {
 	err  error
 	data []byte
 }
+
 func (r *seqReader) Read(p []byte) (int, error) {
 	if r.step == 0 {
 		r.step = 1
@@ -1369,6 +1437,7 @@ func TestCopyPolicy_SlowPath_ReadZeroMore_RetryThenProgress(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, string(dst.data))
 	}
 }
+
 // (complex multi-iteration inner write-loop scenario intentionally omitted to
 // avoid tight coupling with internal control flow semantics.)
 // --- copyBufferPolicy: read-side progress then EOF return ---
@@ -1376,6 +1445,7 @@ type readerDataThenEOF struct {
 	data []byte
 	done bool
 }
+
 func (r *readerDataThenEOF) Read(p []byte) (int, error) {
 	if r.done {
 		return 0, iox.EOF
@@ -1392,6 +1462,7 @@ func TestCopyPolicy_SlowPath_ReadDataThenEOF_ReturnsNil(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, string(dst.data))
 	}
 }
+
 // --- copyBufferPolicy: progress then generic error after multiple write iterations ---
 // readerDataThenErr returns data on first read, then generic error.
 type readerDataThenErr struct {
@@ -1399,6 +1470,7 @@ type readerDataThenErr struct {
 	err  error
 	done bool
 }
+
 func (r *readerDataThenErr) Read(p []byte) (int, error) {
 	if r.done {
 		return 0, r.err
@@ -1407,12 +1479,14 @@ func (r *readerDataThenErr) Read(p []byte) (int, error) {
 	n := copy(p, r.data)
 	return n, nil
 }
+
 // chunkWriter forces short writes (n < len(p)) with nil error, which makes the
 // inner write-loop iterate multiple times before finishing a chunk.
 type chunkWriter struct {
 	limit int
 	buf   bytes.Buffer
 }
+
 func (w *chunkWriter) Write(p []byte) (int, error) {
 	if w.limit <= 0 || w.limit >= len(p) {
 		n, _ := w.buf.Write(p)
@@ -1431,8 +1505,10 @@ func TestCopyPolicy_SlowPath_WriteLoop_ThenGenericReadError(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, w.buf.String())
 	}
 }
+
 // --- copyBufferPolicy: zero WouldBlock retry then data+More with Return ---
 type seqWBThenDataMore struct{ step int }
+
 func (s *seqWBThenDataMore) Read(p []byte) (int, error) {
 	if s.step == 0 {
 		s.step = 1
@@ -1477,8 +1553,10 @@ func TestPolicy_DefaultYields_Callable(t *testing.T) {
 	iox.YieldPolicy{}.Yield(iox.OpCopyWrite)
 	iox.YieldOnWriteWouldBlockPolicy{}.Yield(iox.OpCopyWrite)
 }
+
 // funcReader adapts a function to an iox.Reader.
 type funcReader struct{ read func(p []byte) (int, error) }
+
 func (r *funcReader) Read(p []byte) (int, error) { return r.read(p) }
 func TestCopyNPolicy_NilPolicy_Delegates(t *testing.T) {
 	var dst bytes.Buffer
@@ -1488,6 +1566,7 @@ func TestCopyNPolicy_NilPolicy_Delegates(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, dst.String())
 	}
 }
+
 // (WriterTo fast-path WB cases are already covered in copy_policy_test.go)
 func TestTeeWriterPolicy_NilPolicy_Delegates(t *testing.T) {
 	var primary, tee bytes.Buffer
@@ -1505,8 +1584,10 @@ func TestPolicy_YieldFuncs_Branches(t *testing.T) {
 		t.Fatalf("counters: %d %d", c1, c2)
 	}
 }
+
 // --- Additional tee policy return-path coverage ---
 type wbOnlyWriter struct{}
+
 func (wbOnlyWriter) Write(p []byte) (int, error) { return 0, iox.ErrWouldBlock }
 func TestTeeReaderPolicy_SideWouldBlock_ReturnsWouldBlock(t *testing.T) {
 	r := bytes.NewBufferString("ab")
@@ -1527,12 +1608,14 @@ func TestTeeWriterPolicy_TeeWouldBlock_ReturnsWouldBlock(t *testing.T) {
 		t.Fatalf("n=%d err=%v primary=%q", n, err, primary.String())
 	}
 }
+
 // --- copyBufferPolicy slow-path write ErrMore branches ---
 type partialThenMoreWriter struct {
 	once bool
 	k    int
 	buf  bytes.Buffer
 }
+
 func (w *partialThenMoreWriter) Write(p []byte) (int, error) {
 	if !w.once {
 		w.once = true
@@ -1554,12 +1637,14 @@ func TestCopyPolicy_SlowPath_WriteMore_RetryThenOK(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, dst.buf.String())
 	}
 }
+
 // --- Remaining coverage for teeReaderWithPolicy and teeWriterWithPolicy ---
 // dataThenWB2 returns data and ErrWouldBlock in the same call.
 type dataThenWB2 struct {
 	data []byte
 	done bool
 }
+
 func (r *dataThenWB2) Read(p []byte) (int, error) {
 	if r.done {
 		return 0, iox.EOF
@@ -1584,11 +1669,13 @@ func TestTeeReaderPolicy_DataThenWouldBlock_RetryReturnsNil(t *testing.T) {
 		t.Fatalf("n=%d err=%v read=%q side=%q", n, err, string(buf[:n]), side.String())
 	}
 }
+
 // teeMoreOnceThenOK returns ErrMore once, then writes all on retry.
 type teeMoreOnceThenOK struct {
 	more bool
 	buf  bytes.Buffer
 }
+
 func (w *teeMoreOnceThenOK) Write(p []byte) (int, error) {
 	if !w.more {
 		w.more = true
@@ -1611,8 +1698,10 @@ func TestTeeWriterPolicy_TeeMore_RetryCompletes(t *testing.T) {
 		t.Fatalf("n=%d err=%v primary=%q tee=%q", n, err, primary.String(), tee.buf.String())
 	}
 }
+
 // writerErrAlways returns a generic error.
 type writerErrAlways struct{ err error }
+
 func (w writerErrAlways) Write([]byte) (int, error) { return 0, w.err }
 func TestCopyPolicy_SlowPath_WriteGenericError_Returns(t *testing.T) {
 	src := bytes.NewBufferString("x")
@@ -1622,12 +1711,14 @@ func TestCopyPolicy_SlowPath_WriteGenericError_Returns(t *testing.T) {
 		t.Fatalf("want (0, boom) got (%d, %v)", n, err)
 	}
 }
+
 // --- copyBufferPolicy fast-path generic errors ---
 // wtGenericErr returns (n, generic error) on WriteTo.
 type wtGenericErr struct {
 	n   int64
 	err error
 }
+
 func (w wtGenericErr) Read(p []byte) (int, error)        { return 0, iox.EOF }
 func (w wtGenericErr) WriteTo(iox.Writer) (int64, error) { return w.n, w.err }
 func TestCopyPolicy_WriterToFastPath_GenericError(t *testing.T) {
@@ -1636,11 +1727,13 @@ func TestCopyPolicy_WriterToFastPath_GenericError(t *testing.T) {
 		t.Fatalf("want (7, wt-err) got (%d, %v)", n, err)
 	}
 }
+
 // rfGenericErr returns (n, generic error) on ReadFrom.
 type rfGenericErr struct {
 	n   int64
 	err error
 }
+
 func (rfGenericErr) Write(p []byte) (int, error)          { return len(p), nil }
 func (r rfGenericErr) ReadFrom(iox.Reader) (int64, error) { return r.n, r.err }
 func TestCopyPolicy_ReaderFromFastPath_GenericError(t *testing.T) {
@@ -1649,12 +1742,14 @@ func TestCopyPolicy_ReaderFromFastPath_GenericError(t *testing.T) {
 		t.Fatalf("want (3, rf-err) got (%d, %v)", n, err)
 	}
 }
+
 // --- Additional tee coverage for PolicyRetry paths ---
 // dataThenMore2 returns data and ErrMore in the same call.
 type dataThenMore2 struct {
 	data []byte
 	done bool
 }
+
 func (r *dataThenMore2) Read(p []byte) (int, error) {
 	if r.done {
 		return 0, iox.EOF
@@ -1679,11 +1774,13 @@ func TestTeeReaderPolicy_DataThenMore_RetryReturnsNil(t *testing.T) {
 		t.Fatalf("n=%d err=%v read=%q side=%q", n, err, string(buf[:n]), side.String())
 	}
 }
+
 // primaryMoreOnceOK: primary returns ErrMore once, then writes all.
 type primaryMoreOnceOK struct {
 	more bool
 	buf  bytes.Buffer
 }
+
 func (w *primaryMoreOnceOK) Write(p []byte) (int, error) {
 	if !w.more {
 		w.more = true
@@ -1706,6 +1803,7 @@ func TestTeeWriterPolicy_PrimaryMore_RetryCompletes(t *testing.T) {
 		t.Fatalf("n=%d err=%v primary=%q tee=%q", n, err, p.buf.String(), tee.String())
 	}
 }
+
 // --- copyBufferPolicy slow-path read: data + WouldBlock with PolicyRetry returns (n,nil) ---
 func TestCopyPolicy_ReadDataThenWouldBlock_RetryReturnsNil(t *testing.T) {
 	var dst sliceWriter // avoid ReaderFrom fast-path; exercise slow path OpCopyRead
@@ -1721,12 +1819,14 @@ func TestCopyPolicy_ReadDataThenWouldBlock_RetryReturnsNil(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, string(dst.data))
 	}
 }
+
 // --- Partial progress coverage for copyBufferPolicy and teeWriterWithPolicy ---
 // writerPartialWB writes k bytes then ErrWouldBlock.
 type writerPartialWB struct {
 	k   int
 	buf bytes.Buffer
 }
+
 func (w *writerPartialWB) Write(p []byte) (int, error) {
 	if w.k <= 0 {
 		return 0, iox.ErrWouldBlock
@@ -1746,11 +1846,13 @@ func TestCopyPolicy_SlowPath_WritePartial_ThenWouldBlock_ReturnsCounts(t *testin
 		t.Fatalf("n=%d err=%v dst=%q", n, err, dst.buf.String())
 	}
 }
+
 // writerPartialMore writes k bytes then ErrMore.
 type writerPartialMore struct {
 	k   int
 	buf bytes.Buffer
 }
+
 func (w *writerPartialMore) Write(p []byte) (int, error) {
 	if w.k <= 0 {
 		return 0, iox.ErrMore
@@ -1770,8 +1872,10 @@ func TestCopyPolicy_SlowPath_WritePartial_ThenMore_ReturnsCounts(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, dst.buf.String())
 	}
 }
+
 // writerZeroNil writes 0 and returns nil error – should trigger ErrShortWrite.
 type writerZeroNil struct{}
+
 func (writerZeroNil) Write([]byte) (int, error) { return 0, nil }
 func TestCopyPolicy_SlowPath_WriteZeroNil_ErrShortWrite(t *testing.T) {
 	src := bytes.NewBufferString("Z")
@@ -1780,11 +1884,13 @@ func TestCopyPolicy_SlowPath_WriteZeroNil_ErrShortWrite(t *testing.T) {
 		t.Fatalf("want (0, ErrShortWrite) got (%d, %v)", n, err)
 	}
 }
+
 // primaryPartialWB writes k bytes then ErrWouldBlock on primary.
 type primaryPartialWB struct {
 	k   int
 	buf bytes.Buffer
 }
+
 func (w *primaryPartialWB) Write(p []byte) (int, error) {
 	if w.k <= 0 {
 		return 0, iox.ErrWouldBlock
@@ -1807,11 +1913,13 @@ func TestTeeWriterPolicy_PrimaryPartialWouldBlock_ReturnsCounts(t *testing.T) {
 		t.Fatalf("n=%d err=%v primary=%q tee=%q", n, err, p.buf.String(), tee.String())
 	}
 }
+
 // teePartialMore writes k bytes then ErrMore on tee side.
 type teePartialMore struct {
 	k   int
 	buf bytes.Buffer
 }
+
 func (w *teePartialMore) Write(p []byte) (int, error) {
 	if w.k <= 0 {
 		return 0, iox.ErrMore
@@ -1833,10 +1941,14 @@ func TestTeeWriterPolicy_TeePartialMore_ReturnsCounts(t *testing.T) {
 		t.Fatalf("n=%d err=%v primary=%q tee=%q", n, err, primary.String(), tee.buf.String())
 	}
 }
+
 // --- teeReaderWithPolicy n==0 semantic returns ---
 type alwaysWBReader struct{}
+
 func (alwaysWBReader) Read([]byte) (int, error) { return 0, iox.ErrWouldBlock }
+
 type alwaysMoreReader struct{}
+
 func (alwaysMoreReader) Read([]byte) (int, error) { return 0, iox.ErrMore }
 func TestTeeReaderPolicy_ZeroThenWouldBlock_ReturnsWB(t *testing.T) {
 	tr := iox.TeeReaderPolicy(alwaysWBReader{}, &bytes.Buffer{}, iox.ReturnPolicy{})
@@ -1854,11 +1966,13 @@ func TestTeeReaderPolicy_ZeroThenMore_ReturnsMore(t *testing.T) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
+
 // Side write ErrMore once with PolicyRetry, then succeed.
 type sideMoreOnceOK struct {
 	tried bool
 	buf   bytes.Buffer
 }
+
 func (w *sideMoreOnceOK) Write(p []byte) (int, error) {
 	if !w.tried {
 		w.tried = true
@@ -1882,6 +1996,7 @@ func TestTeeReaderPolicy_SideMore_RetryCompletes(t *testing.T) {
 		t.Fatalf("n=%d err=%v read=%q side=%q", n, err, string(buf[:n]), w.buf.String())
 	}
 }
+
 // --- Mixed retry branches within a single CopyPolicy slow-path write ---
 // writerWBThenMore writes k bytes, then on first call returns ErrWouldBlock;
 // next Write attempt returns 0, ErrMore.
@@ -1890,6 +2005,7 @@ type writerWBThenMore struct {
 	tried bool
 	buf   bytes.Buffer
 }
+
 func (w *writerWBThenMore) Write(p []byte) (int, error) {
 	if !w.tried {
 		w.tried = true
@@ -1915,11 +2031,13 @@ func TestCopyPolicy_SlowPath_WriteWouldBlockRetryThenMore_Returns(t *testing.T) 
 		t.Fatalf("n=%d err=%v dst=%q", n, err, dst.buf.String())
 	}
 }
+
 // --- Fast-path WriterTo: retry then generic error ---
 type wtWBThenErr struct {
 	n    int64
 	step int
 }
+
 func (w *wtWBThenErr) Read(p []byte) (int, error) { return 0, iox.EOF }
 func (w *wtWBThenErr) WriteTo(iox.Writer) (int64, error) {
 	if w.step == 0 {
@@ -1936,11 +2054,13 @@ func TestCopyPolicy_WriterToFastPath_WouldBlockRetryThenGenericError(t *testing.
 		t.Fatalf("want (5, wt-generic) got (%d, %v)", n, err)
 	}
 }
+
 // --- Fast-path ReaderFrom: retry then generic error ---
 type rfWBThenErr struct {
 	n    int64
 	step int
 }
+
 func (rfWBThenErr) Write(p []byte) (int, error) { return len(p), nil }
 func (w *rfWBThenErr) ReadFrom(iox.Reader) (int64, error) {
 	if w.step == 0 {
@@ -1966,8 +2086,10 @@ func TestCopyPolicy_SlowPath_ReadSide_GenericError_Returns(t *testing.T) {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, string(dst.data))
 	}
 }
+
 // --- Slow-path: nr==0 then nil return ---
 type zeroThenNilReader3 struct{ called bool }
+
 func (r *zeroThenNilReader3) Read([]byte) (int, error) {
 	if !r.called {
 		r.called = true
@@ -1982,6 +2104,7 @@ func TestCopyPolicy_SlowPath_ZeroThenNil_Returns(t *testing.T) {
 		t.Fatalf("n=%d err=%v dstlen=%d", n, err, len(dst.data))
 	}
 }
+
 // Ensure teeReaderWithPolicy returns (n, ErrWouldBlock) when policy chooses return.
 func TestTeeReaderPolicy_DataThenWouldBlock_ReturnsWouldBlock(t *testing.T) {
 	r := &dataThenWB2{data: []byte("xy")}
@@ -1993,11 +2116,13 @@ func TestTeeReaderPolicy_DataThenWouldBlock_ReturnsWouldBlock(t *testing.T) {
 		t.Fatalf("n=%d err=%v read=%q side=%q", n, err, string(buf[:n]), side.String())
 	}
 }
+
 // writerMoreOnceThenOK returns (0, ErrMore) once, then writes all data.
 type writerMoreOnceThenOK struct {
 	tried bool
 	buf   bytes.Buffer
 }
+
 func (w *writerMoreOnceThenOK) Write(p []byte) (int, error) {
 	if !w.tried {
 		w.tried = true
@@ -2030,8 +2155,10 @@ func TestCopyPolicy_SlowPath_WriteMoreZeroThenOK_Retry(t *testing.T) {
 		t.Fatalf("expected yield on OpCopyWrite, got %v", yielded)
 	}
 }
+
 // writerZeroMore always returns (0, ErrMore).
 type writerZeroMore struct{}
+
 func (writerZeroMore) Write([]byte) (int, error) { return 0, iox.ErrMore }
 func TestCopyPolicy_SlowPath_WriteZeroMore_ReturnsMore(t *testing.T) {
 	// Use bytes.Reader (implements io.Seeker) so rollback succeeds and ErrMore is returned.
@@ -2041,6 +2168,7 @@ func TestCopyPolicy_SlowPath_WriteZeroMore_ReturnsMore(t *testing.T) {
 		t.Fatalf("want (0, ErrMore) got (%d, %v)", n, err)
 	}
 }
+
 // Cover ReturnPolicy.Yield empty body.
 func TestReturnPolicy_Yield_NoOp(t *testing.T) {
 	var rp iox.ReturnPolicy
@@ -2095,6 +2223,7 @@ func TestCopy_GenericReadErrorPropagates(t *testing.T) {
 		t.Fatalf("n=%d", n)
 	}
 }
+
 // This test documents the intended contract: on ErrMore, callers should
 // return to their loop and retry later; subsequent calls continue progress.
 func TestCopy_ReturnOnErrMore_AcrossCalls(t *testing.T) {
