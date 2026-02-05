@@ -199,6 +199,17 @@ func (l *limitedReader) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
+// rollbackSeeker attempts to rewind src by delta bytes if it implements io.Seeker.
+// Returns nil on success, ErrNoSeeker if src is not seekable, or the seek error.
+func rollbackSeeker(src Reader, delta int) error {
+	seeker, ok := src.(io.Seeker)
+	if !ok {
+		return ErrNoSeeker
+	}
+	_, err := seeker.Seek(int64(delta), io.SeekCurrent)
+	return err
+}
+
 // Buffer is the default stack buffer used by Copy when none is supplied.
 type Buffer [32 * 1024]byte
 
@@ -234,13 +245,8 @@ func copyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 				// Attempt Seeker rollback on partial write with semantic error.
 				// This allows the caller to retry without data loss.
 				if nw < nr && IsSemantic(ew) {
-					if seeker, ok := src.(io.Seeker); ok {
-						if _, seekErr := seeker.Seek(int64(nw-nr), io.SeekCurrent); seekErr != nil {
-							return written, seekErr
-						}
-					} else {
-						// Source is not seekable; unwritten bytes are unrecoverable.
-						return written, ErrNoSeeker
+					if rollbackErr := rollbackSeeker(src, nw-nr); rollbackErr != nil {
+						return written, rollbackErr
 					}
 				}
 				return written, ew
@@ -358,13 +364,8 @@ func copyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 						}
 						// Attempt Seeker rollback on partial write when policy returns.
 						if off < nr {
-							if seeker, ok := src.(io.Seeker); ok {
-								if _, seekErr := seeker.Seek(int64(off-nr), io.SeekCurrent); seekErr != nil {
-									return written, seekErr
-								}
-							} else {
-								// Source is not seekable; unwritten bytes are unrecoverable.
-								return written, ErrNoSeeker
+							if rollbackErr := rollbackSeeker(src, off-nr); rollbackErr != nil {
+								return written, rollbackErr
 							}
 						}
 						return written, ErrWouldBlock
@@ -376,13 +377,8 @@ func copyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 						}
 						// Attempt Seeker rollback on partial write when policy returns.
 						if off < nr {
-							if seeker, ok := src.(io.Seeker); ok {
-								if _, seekErr := seeker.Seek(int64(off-nr), io.SeekCurrent); seekErr != nil {
-									return written, seekErr
-								}
-							} else {
-								// Source is not seekable; unwritten bytes are unrecoverable.
-								return written, ErrNoSeeker
+							if rollbackErr := rollbackSeeker(src, off-nr); rollbackErr != nil {
+								return written, rollbackErr
 							}
 						}
 						return written, ErrMore
