@@ -9,7 +9,7 @@ Semántica no bloqueante para el paquete Go `io` : señales de primera clase par
 
 Idioma: [English](./README.md) | [简体中文](./README.zh-CN.md) | **Español** | [日本語](./README.ja.md) | [Français](./README.fr.md)
 
-## ¿Qué es este paquete?
+## Descripción general
 
 `iox` es para stacks de I/O no bloqueantes donde “sin progreso ahora” y “progreso ahora, pero la operación sigue activa” son **flujo de control normal**, no fallos.
 

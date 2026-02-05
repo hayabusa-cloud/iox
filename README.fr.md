@@ -9,7 +9,7 @@ Sémantique non bloquante pour le paquet Go `io` : signaux de premier ordre pour
 
 Langue : [English](./README.md) | [简体中文](./README.zh-CN.md) | [Español](./README.es.md) | [日本語](./README.ja.md) | **Français**
 
-## À quoi sert ce package ?
+## Aperçu
 
 `iox` vise les stacks d’I/O non bloquantes où « aucun progrès maintenant » et « progrès maintenant, mais l’opération reste active » sont un **flux de contrôle normal**, pas des échecs.
 
