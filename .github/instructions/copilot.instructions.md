@@ -41,7 +41,7 @@
 |--------|-----------------|-----------|
 | `nil` (default) | Return to caller | Return to caller |
 | `ReturnPolicy` | Return | Return |
-| `YieldPolicy` | Yield + retry | Continue |
+| `YieldPolicy` | Yield + retry | Return to caller |
 | Custom | `OnWouldBlock(op)` | `OnMore(op)` |
 
 ## Tee Count Semantics
