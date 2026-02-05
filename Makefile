@@ -15,11 +15,11 @@ bench:
 
 .PHONY: bench-cpu
 bench-cpu:
-	go test -bench=. -benchmem -cpuprofile=cpu.out -run=^$$ .
+	go test -bench=. -benchmem -cpuprofile=cpu.out -run=^$$ ./...
 
 .PHONY: bench-mem
 bench-mem:
-	go test -bench=. -benchmem -memprofile=mem.out -run=^$$ .
+	go test -bench=. -benchmem -memprofile=mem.out -run=^$$ ./...
 
 .PHONY: vet
 vet:
