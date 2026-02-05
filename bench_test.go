@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"code.hybscloud.com/iox"
 )
@@ -339,4 +340,335 @@ func BenchmarkOpString_All(b *testing.B) {
 		s = ops[i%len(ops)].String()
 	}
 	_ = s
+}
+
+// -----------------------------------------------------------------------------
+// Backoff benchmarks
+// -----------------------------------------------------------------------------
+
+func BenchmarkBackoff_Duration(b *testing.B) {
+	var bo iox.Backoff
+	var d time.Duration
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		d = bo.Duration()
+	}
+	_ = d
+}
+
+func BenchmarkBackoff_Block(b *testing.B) {
+	var bo iox.Backoff
+	var n int
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		n = bo.Block()
+	}
+	_ = n
+}
+
+func BenchmarkBackoff_Reset(b *testing.B) {
+	var bo iox.Backoff
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		bo.Reset()
+	}
+}
+
+func BenchmarkBackoff_SetBase(b *testing.B) {
+	var bo iox.Backoff
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		bo.SetBase(time.Millisecond)
+	}
+}
+
+func BenchmarkBackoff_SetMax(b *testing.B) {
+	var bo iox.Backoff
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		bo.SetMax(time.Second)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Extended semantics benchmarks
+// -----------------------------------------------------------------------------
+
+func BenchmarkIsSemantic_WouldBlock(b *testing.B) {
+	err := iox.ErrWouldBlock
+	var sink bool
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = iox.IsSemantic(err)
+	}
+	_ = sink
+}
+
+func BenchmarkIsSemantic_More(b *testing.B) {
+	err := iox.ErrMore
+	var sink bool
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = iox.IsSemantic(err)
+	}
+	_ = sink
+}
+
+func BenchmarkIsSemantic_OtherError(b *testing.B) {
+	err := io.ErrClosedPipe
+	var sink bool
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = iox.IsSemantic(err)
+	}
+	_ = sink
+}
+
+func BenchmarkIsNonFailure_nil(b *testing.B) {
+	var sink bool
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = iox.IsNonFailure(nil)
+	}
+	_ = sink
+}
+
+func BenchmarkIsNonFailure_WouldBlock(b *testing.B) {
+	err := iox.ErrWouldBlock
+	var sink bool
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = iox.IsNonFailure(err)
+	}
+	_ = sink
+}
+
+func BenchmarkIsNonFailure_OtherError(b *testing.B) {
+	err := io.ErrClosedPipe
+	var sink bool
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = iox.IsNonFailure(err)
+	}
+	_ = sink
+}
+
+func BenchmarkIsProgress_nil(b *testing.B) {
+	var sink bool
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = iox.IsProgress(nil)
+	}
+	_ = sink
+}
+
+func BenchmarkIsProgress_More(b *testing.B) {
+	err := iox.ErrMore
+	var sink bool
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = iox.IsProgress(err)
+	}
+	_ = sink
+}
+
+func BenchmarkIsWouldBlock(b *testing.B) {
+	err := iox.ErrWouldBlock
+	var sink bool
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = iox.IsWouldBlock(err)
+	}
+	_ = sink
+}
+
+func BenchmarkIsMore(b *testing.B) {
+	err := iox.ErrMore
+	var sink bool
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = iox.IsMore(err)
+	}
+	_ = sink
+}
+
+func BenchmarkOutcome_String(b *testing.B) {
+	outcomes := []iox.Outcome{iox.OutcomeOK, iox.OutcomeWouldBlock, iox.OutcomeMore, iox.OutcomeFailure}
+	var s string
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		s = outcomes[i%len(outcomes)].String()
+	}
+	_ = s
+}
+
+// -----------------------------------------------------------------------------
+// CopyPolicy benchmarks
+// -----------------------------------------------------------------------------
+
+func BenchmarkCopyPolicy_ReturnPolicy(b *testing.B) {
+	sizes := []int{1 << 10, 32 << 10, 1 << 20}
+	for _, size := range sizes {
+		b.Run(byteSize(size), func(b *testing.B) {
+			data := bytes.Repeat([]byte{'x'}, size)
+			var p iox.ReturnPolicy
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				src := bytes.NewReader(data)
+				_, err := iox.CopyPolicy(devNull{}, src, p)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkCopyPolicy_YieldPolicy(b *testing.B) {
+	sizes := []int{1 << 10, 32 << 10, 1 << 20}
+	for _, size := range sizes {
+		b.Run(byteSize(size), func(b *testing.B) {
+			data := bytes.Repeat([]byte{'x'}, size)
+			var p iox.YieldPolicy
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				src := bytes.NewReader(data)
+				_, err := iox.CopyPolicy(devNull{}, src, p)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkCopyBufferPolicy_ReturnPolicy(b *testing.B) {
+	sizes := []int{1 << 10, 32 << 10, 1 << 20}
+	for _, size := range sizes {
+		b.Run(byteSize(size), func(b *testing.B) {
+			data := bytes.Repeat([]byte{'x'}, size)
+			buf := make([]byte, 32*1024)
+			var p iox.ReturnPolicy
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				src := bytes.NewReader(data)
+				_, err := iox.CopyBufferPolicy(devNull{}, src, buf, p)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Copy comparison benchmarks (iox vs std io)
+// -----------------------------------------------------------------------------
+
+func BenchmarkCopy_iox_vs_io(b *testing.B) {
+	sizes := []int{1 << 10, 32 << 10, 1 << 20}
+	for _, size := range sizes {
+		data := bytes.Repeat([]byte{'x'}, size)
+		b.Run("iox/"+byteSize(size), func(b *testing.B) {
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				src := bytes.NewReader(data)
+				_, err := iox.Copy(devNull{}, src)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		b.Run("io/"+byteSize(size), func(b *testing.B) {
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				src := bytes.NewReader(data)
+				_, err := io.Copy(devNull{}, src)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// -----------------------------------------------------------------------------
+// TeeReader/TeeWriter chained benchmarks
+// -----------------------------------------------------------------------------
+
+func BenchmarkTeeReader_Chained(b *testing.B) {
+	sizes := []int{1 << 10, 32 << 10}
+	for _, size := range sizes {
+		b.Run(byteSize(size), func(b *testing.B) {
+			srcData := bytes.Repeat([]byte{'x'}, size)
+			buf := make([]byte, 32*1024)
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				r := bytes.NewReader(srcData)
+				// Chain two TeeReaders
+				tr1 := iox.TeeReader(r, devNull{})
+				tr2 := iox.TeeReader(tr1, devNull{})
+				for {
+					n, err := tr2.Read(buf)
+					if n == 0 || err != nil {
+						break
+					}
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkTeeWriter_Chained(b *testing.B) {
+	sizes := []int{1 << 10, 32 << 10}
+	for _, size := range sizes {
+		b.Run(byteSize(size), func(b *testing.B) {
+			data := bytes.Repeat([]byte{'x'}, size)
+			// Chain two TeeWriters
+			tw1 := iox.TeeWriter(devNull{}, devNull{})
+			tw2 := iox.TeeWriter(tw1, devNull{})
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if _, err := tw2.Write(data); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Error wrapping benchmarks
+// -----------------------------------------------------------------------------
+
+func BenchmarkClassify_DeepWrapped(b *testing.B) {
+	// Create a deeply wrapped error chain
+	err := iox.ErrMore
+	for i := 0; i < 5; i++ {
+		err = errors.Join(err)
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = iox.Classify(err)
+	}
+}
+
+func BenchmarkIsSemantic_DeepWrapped(b *testing.B) {
+	err := iox.ErrWouldBlock
+	for i := 0; i < 5; i++ {
+		err = errors.Join(err)
+	}
+	var sink bool
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = iox.IsSemantic(err)
+	}
+	_ = sink
 }
