@@ -9,7 +9,7 @@
 
 语言： [English](./README.md) | **简体中文** | [Español](./README.es.md) | [日本語](./README.ja.md) | [Français](./README.fr.md)
 
-## 这个包是做什么的？
+## 概述
 
 `iox` 面向非阻塞 I/O 栈：在这类系统里，“现在没有进展”与“现在有进展，但操作仍然活跃”是**正常控制流**，不是失败。
 

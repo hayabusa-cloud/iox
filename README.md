@@ -9,7 +9,7 @@ Non-blocking semantics for Go `io` package: first-class signals for would-block 
 
 Language: **English** | [简体中文](./README.zh-CN.md) | [Español](./README.es.md) | [日本語](./README.ja.md) | [Français](./README.fr.md)
 
-## What this package is?
+## Overview
 
 `iox` is for non-blocking I/O stacks where “no progress right now” and “progress now, but the operation remains active” are **normal control flow**, not failures.
 
