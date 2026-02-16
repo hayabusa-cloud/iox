@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: [ 'stable', '1.25.x' ]
+        go-version: [ 'stable', '1.26.x' ]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
