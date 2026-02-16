@@ -651,7 +651,7 @@ func BenchmarkTeeWriter_Chained(b *testing.B) {
 func BenchmarkClassify_DeepWrapped(b *testing.B) {
 	// Create a deeply wrapped error chain
 	err := iox.ErrMore
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		err = errors.Join(err)
 	}
 	b.ReportAllocs()
@@ -662,7 +662,7 @@ func BenchmarkClassify_DeepWrapped(b *testing.B) {
 
 func BenchmarkIsSemantic_DeepWrapped(b *testing.B) {
 	err := iox.ErrWouldBlock
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		err = errors.Join(err)
 	}
 	var sink bool
