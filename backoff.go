@@ -56,10 +56,7 @@ func (b *Backoff) Wait() {
 	}
 
 	// Linear duration: base * n
-	d := time.Duration(b.n) * b.base
-	if d > b.max {
-		d = b.max
-	}
+	d := min(time.Duration(b.n)*b.base, b.max)
 
 	time.Sleep(b.applyJitter(d))
 
@@ -112,8 +109,5 @@ func (b *Backoff) Duration() time.Duration {
 	if max <= 0 {
 		max = DefaultBackoffMax
 	}
-	if d > max {
-		return max
-	}
-	return d
+	return min(d, max)
 }

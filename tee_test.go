@@ -29,10 +29,7 @@ func (w *failAfterWriter) Write(p []byte) (int, error) {
 	if w.k <= 0 {
 		return 0, w.err
 	}
-	n := w.k
-	if n > len(p) {
-		n = len(p)
-	}
+	n := min(w.k, len(p))
 	w.k -= n
 	return n, w.err
 }

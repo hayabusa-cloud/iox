@@ -59,13 +59,7 @@ func (w shortWriter) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	n := w.limit
-	if n > len(p) {
-		n = len(p)
-	}
-	if n < 0 {
-		n = 0
-	}
+	n := max(min(w.limit, len(p)), 0)
 	return n, nil
 }
 
@@ -75,13 +69,7 @@ type errWriter struct {
 }
 
 func (w errWriter) Write(p []byte) (int, error) {
-	n := w.n
-	if n > len(p) {
-		n = len(p)
-	}
-	if n < 0 {
-		n = 0
-	}
+	n := max(min(w.n, len(p)), 0)
 	return n, w.err
 }
 
@@ -994,10 +982,7 @@ func (w *partialWBWriter) Write(p []byte) (int, error) {
 	if w.partial <= 0 {
 		return 0, iox.ErrWouldBlock
 	}
-	n := w.partial
-	if n > len(p) {
-		n = len(p)
-	}
+	n := min(w.partial, len(p))
 	w.buf = append(w.buf, p[:n]...)
 	w.partial = 0
 	return n, iox.ErrWouldBlock
@@ -1013,10 +998,7 @@ func (w *partialMoreWriter) Write(p []byte) (int, error) {
 	if w.partial <= 0 {
 		return 0, iox.ErrMore
 	}
-	n := w.partial
-	if n > len(p) {
-		n = len(p)
-	}
+	n := min(w.partial, len(p))
 	w.buf = append(w.buf, p[:n]...)
 	w.partial = 0
 	return n, iox.ErrMore
