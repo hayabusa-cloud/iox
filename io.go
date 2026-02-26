@@ -135,7 +135,14 @@ func CopyNPolicy(dst Writer, src Reader, n int64, policy SemanticPolicy) (writte
 		return CopyN(dst, src, n)
 	}
 	lr := limitedReader{R: src, N: n}
-	return copyBufferPolicy(dst, &lr, nil, policy)
+	written, err = copyBufferPolicy(dst, &lr, nil, policy)
+	if written == n {
+		return n, nil
+	}
+	if err == nil || err == io.EOF {
+		return written, io.ErrUnexpectedEOF
+	}
+	return written, err
 }
 
 // CopyNBuffer is like CopyN but stages through buf if needed.
@@ -177,7 +184,14 @@ func CopyNBufferPolicy(dst Writer, src Reader, n int64, buf []byte, policy Seman
 		return CopyNBuffer(dst, src, n, buf)
 	}
 	lr := limitedReader{R: src, N: n}
-	return copyBufferPolicy(dst, &lr, buf, policy)
+	written, err = copyBufferPolicy(dst, &lr, buf, policy)
+	if written == n {
+		return n, nil
+	}
+	if err == nil || err == io.EOF {
+		return written, io.ErrUnexpectedEOF
+	}
+	return written, err
 }
 
 type limitedReader struct {
@@ -382,6 +396,12 @@ func copyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 							}
 						}
 						return written, ErrMore
+					}
+					// Attempt Seeker rollback on partial write with semantic error.
+					if off < nr && IsSemantic(ew) {
+						if rollbackErr := rollbackSeeker(src, off-nr); rollbackErr != nil {
+							return written, rollbackErr
+						}
 					}
 					return written, ew
 				}

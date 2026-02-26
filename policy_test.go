@@ -457,22 +457,21 @@ func TestCopyPolicy_ReaderFromFastPath_More_Returns(t *testing.T) {
 		t.Fatalf("want More from ReaderFrom fast path: n=%d err=%v", n, err)
 	}
 }
-func TestCopyNPolicy_Short_NoUnexpectedEOF_NoErrShort(t *testing.T) {
+func TestCopyNPolicy_Short_ReturnsUnexpectedEOF(t *testing.T) {
 	var dst bytes.Buffer
 	// src returns fewer than N without error → UnexpectedEOF
 	src := bytes.NewBufferString("ab")
 	n, err := iox.CopyNPolicy(&dst, src, 3, iox.YieldPolicy{})
-	// Current CopyNPolicy returns underlying result directly (no UnexpectedEOF mapping)
-	if err != nil || n != 2 {
-		t.Fatalf("want (2,nil) got n=%d err=%v", n, err)
+	if err != io.ErrUnexpectedEOF || n != 2 {
+		t.Fatalf("want (2,ErrUnexpectedEOF) got n=%d err=%v", n, err)
 	}
 }
-func TestCopyNPolicy_ShortEOF_NoUnexpectedEOF(t *testing.T) {
+func TestCopyNPolicy_ShortEOF_ReturnsUnexpectedEOF(t *testing.T) {
 	var dst bytes.Buffer
 	src := bytes.NewBufferString("a")
 	n, err := iox.CopyNPolicy(&dst, src, 2, iox.YieldPolicy{})
-	if err != nil || n != 1 {
-		t.Fatalf("want (1,nil) got n=%d err=%v", n, err)
+	if err != io.ErrUnexpectedEOF || n != 1 {
+		t.Fatalf("want (1,ErrUnexpectedEOF) got n=%d err=%v", n, err)
 	}
 }
 func TestCopyNBufferPolicy_ExactN_WithBuf(t *testing.T) {
