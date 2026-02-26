@@ -7,6 +7,7 @@ package iox_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 
@@ -845,5 +846,81 @@ func TestTeeWriterPolicy_PrimaryWouldBlockOnceCompletes(t *testing.T) {
 	}
 	if p.buf.String() != "zz" || tbuf.String() != "zz" {
 		t.Fatalf("primary=%q tee=%q", p.buf.String(), tbuf.String())
+	}
+}
+
+// --- Coverage tests for uncovered patch lines ---
+
+// CopyNPolicy: non-nil/non-EOF error passthrough.
+func TestCopyNPolicy_ErrorPassthrough(t *testing.T) {
+	readErr := errors.New("read-fail")
+	src := &dataThenErrReader{data: []byte("a"), err: readErr}
+	var dst bytes.Buffer
+	n, err := iox.CopyNPolicy(&dst, src, 5, iox.YieldPolicy{})
+	if !errors.Is(err, readErr) || n != 1 {
+		t.Fatalf("want (1, read-fail) got (%d, %v)", n, err)
+	}
+}
+
+// CopyNBufferPolicy: short copy → ErrUnexpectedEOF.
+func TestCopyNBufferPolicy_Short_ReturnsUnexpectedEOF(t *testing.T) {
+	src := bytes.NewBufferString("ab")
+	var dst bytes.Buffer
+	buf := make([]byte, 4)
+	n, err := iox.CopyNBufferPolicy(&dst, src, 5, buf, iox.YieldPolicy{})
+	if err != io.ErrUnexpectedEOF || n != 2 {
+		t.Fatalf("want (2, ErrUnexpectedEOF) got (%d, %v)", n, err)
+	}
+}
+
+// CopyNBufferPolicy: non-nil/non-EOF error passthrough.
+func TestCopyNBufferPolicy_ErrorPassthrough(t *testing.T) {
+	readErr := errors.New("read-fail")
+	src := &dataThenErrReader{data: []byte("x"), err: readErr}
+	var dst bytes.Buffer
+	buf := make([]byte, 4)
+	n, err := iox.CopyNBufferPolicy(&dst, src, 5, buf, iox.YieldPolicy{})
+	if !errors.Is(err, readErr) || n != 1 {
+		t.Fatalf("want (1, read-fail) got (%d, %v)", n, err)
+	}
+}
+
+// wrappedWBWriter returns a wrapped ErrWouldBlock (passes IsSemantic but not ==).
+type wrappedWBWriter struct {
+	n int
+}
+
+func (w *wrappedWBWriter) Write(p []byte) (int, error) {
+	// Partial write with wrapped semantic error.
+	n := w.n
+	if n > len(p) {
+		n = len(p)
+	}
+	return n, fmt.Errorf("wrapped: %w", iox.ErrWouldBlock)
+}
+
+// seekableReader wraps bytes.Reader but hides WriterTo so the slow path is used.
+type seekableReader struct {
+	r *bytes.Reader
+}
+
+func (s *seekableReader) Read(p []byte) (int, error) { return s.r.Read(p) }
+func (s *seekableReader) Seek(offset int64, whence int) (int64, error) {
+	return s.r.Seek(offset, whence)
+}
+
+// copyBufferPolicy: wrapped semantic write error triggers IsSemantic rollback.
+func TestCopyPolicy_SlowPath_WrappedSemanticWrite_Rollback(t *testing.T) {
+	src := &seekableReader{r: bytes.NewReader([]byte("abcd"))}
+	dst := &wrappedWBWriter{n: 1}
+	pol := &recPolicy{}
+	n, err := iox.CopyPolicy(dst, src, pol)
+	if !iox.IsWouldBlock(err) || n != 1 {
+		t.Fatalf("want (1, wrapped-WouldBlock) got (%d, %v)", n, err)
+	}
+	// Verify src was rolled back: position should be at 1 (1 written, rolled back 3).
+	pos, _ := src.Seek(0, io.SeekCurrent)
+	if pos != 1 {
+		t.Fatalf("want src position 1 after rollback, got %d", pos)
 	}
 }
