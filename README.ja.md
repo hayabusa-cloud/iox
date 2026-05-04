@@ -56,6 +56,10 @@ Go の `io.Reader` 約束では、`Read` が `(0, nil)` を返して「進捗な
 - `src` が `io.Seeker` を実装している場合、Copy は `Seek(nw-nr, io.SeekCurrent)` を呼び出して未書き込みバイトを巻き戻します。
 - `src` が `io.Seeker` を実装して**いない**場合、Copy は `ErrNoSeeker` を返し、未書き込みバイトが回復不能であることを示します。
 
+このロールバック保証は、`iox.Copy` が所有する通常の read/write ループに適用されます。標準の `io.WriterTo` または
+`io.ReaderFrom` fast path が選択された場合、その fast path 実装がソース位置の進行と部分書き込みの回復を所有します。実装は
+`ErrWouldBlock` / `ErrMore` を保持し、戻り値の count で未転送とされたバイトを後続の retry で安全に扱えるようにしなければなりません。
+
 **推奨事項：**
 - ノンブロッキングな宛先へコピーする際は、シーク可能なソース（例: `*os.File`、`*bytes.Reader`）を使用してください。
 - シーク不可能なソース（例: ネットワークソケット）の場合、書き込み側の semantic error に対して `PolicyRetry` を設定した `CopyPolicy` を使用してください。これにより、すべての読み取りバイトが返却前に書き込まれることが保証され、ロールバックの必要がなくなります。
@@ -198,9 +202,11 @@ for {
 
 - `src` が `io.WriterTo` を実装していれば `WriteTo` を呼びます
 - そうでなければ `dst` が `io.ReaderFrom` を実装していれば `ReadFrom` を呼びます
-- それ以外は固定サイズのスタックバッファ（`32KiB`）と read/write ループを使います
+- それ以外は内部の固定サイズバッファ（`32KiB`）と read/write ループを使います
 
 fast path で `ErrWouldBlock` / `ErrMore` を保持するため、`WriteTo` / `ReadFrom` の実装が適切な場面でそれらを返すようにしてください。
+Fast path は自身の進捗カウントも正確に保つ必要があります。返す count は実際に転送されたバイト数であり、残りのバイトは後続の
+retry で利用可能であるか、実際の終端エラーとして表現されなければなりません。
 
 通常の `io.Reader`/`io.Writer` しか持っていないが、fast-path インターフェースも提供したい、かつセマンティクスも保持したい場合は次を使います:
 

@@ -12,9 +12,11 @@
 //   - ErrMore: the current completion made progress and more completions will
 //     follow (multi‑shot style). Process now, keep polling for more.
 //
-// These semantics propagate through Copy/CopyN and Tee helpers, including when
-// WriterTo/ReaderFrom fast paths are used. Use the iox.Copy family instead of
-// io.Copy when you need to preserve these semantics.
+// These semantics propagate through Copy/CopyN and Tee helpers. When a
+// WriterTo/ReaderFrom fast path is selected, that fast-path implementation owns
+// its own source advancement and partial-write recovery; it must preserve
+// ErrWouldBlock/ErrMore instead of converting them to nil or EOF. Use the
+// iox.Copy family instead of io.Copy when you need to preserve these semantics.
 //
 // Note: Copy treats a (0, nil) read as "stop copying now" and returns (written, nil)
 // to avoid hidden spinning inside a helper in event-loop code.

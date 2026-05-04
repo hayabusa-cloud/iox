@@ -7,19 +7,19 @@
 
 .PHONY: test
 test:
-	go test -race -covermode=atomic -coverprofile=coverage.out ./...
+	go test -race -covermode=atomic -coverprofile=coverage.out -timeout 120s ./...
 
 .PHONY: bench
 bench:
-	go test -bench=. -benchmem -run=^$$ ./...
+	go test -bench=. -benchmem -run=^$$ -timeout 120s ./...
 
 .PHONY: bench-cpu
 bench-cpu:
-	go test -bench=. -benchmem -cpuprofile=cpu.out -run=^$$ .
+	go test -bench=. -benchmem -cpuprofile=cpu.out -run=^$$ -timeout 120s .
 
 .PHONY: bench-mem
 bench-mem:
-	go test -bench=. -benchmem -memprofile=mem.out -run=^$$ .
+	go test -bench=. -benchmem -memprofile=mem.out -run=^$$ -timeout 120s .
 
 .PHONY: vet
 vet:

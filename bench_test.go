@@ -23,6 +23,24 @@ type devNull struct{}
 
 func (devNull) Write(p []byte) (int, error) { return len(p), nil }
 
+// benchReader is a Reader-only source for generic read/write path benchmarks.
+type benchReader struct {
+	data []byte
+	off  int
+}
+
+func (r *benchReader) Read(p []byte) (int, error) {
+	if r.off >= len(r.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[r.off:])
+	r.off += n
+	if r.off >= len(r.data) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
 // benchWT is a Reader that implements WriterTo.
 type benchWT struct{ buf []byte }
 
@@ -81,8 +99,8 @@ func BenchmarkCopy_SlowPath(b *testing.B) {
 			b.SetBytes(int64(size))
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				src := bytes.NewReader(data)
-				_, err := iox.Copy(devNull{}, src)
+				src := benchReader{data: data}
+				_, err := iox.Copy(devNull{}, &src)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -100,8 +118,8 @@ func BenchmarkCopyBuffer_SlowPath(b *testing.B) {
 			b.SetBytes(int64(size))
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				src := bytes.NewReader(data)
-				_, err := iox.CopyBuffer(devNull{}, src, buf)
+				src := benchReader{data: data}
+				_, err := iox.CopyBuffer(devNull{}, &src, buf)
 				if err != nil {
 					b.Fatal(err)
 				}

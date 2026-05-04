@@ -56,6 +56,11 @@ Para prevenir la pérdida de datos, `iox.Copy` intenta retroceder el puntero del
 - Si `src` implementa `io.Seeker`, Copy llama a `Seek(nw-nr, io.SeekCurrent)` para rebobinar los bytes no escritos.
 - Si `src` **no** implementa `io.Seeker`, Copy devuelve `ErrNoSeeker` para señalar que los bytes no escritos son irrecuperables.
 
+Esta garantía de rollback se aplica al bucle genérico de lectura/escritura que controla `iox.Copy`. Si se selecciona el
+fast path estándar `io.WriterTo` o `io.ReaderFrom`, esa implementación es responsable de su propio avance de fuente y
+recuperación de escrituras parciales; debe preservar `ErrWouldBlock` / `ErrMore` y hacer que el retry sea seguro para
+los bytes que aún no reportó como transferidos.
+
 **Recomendaciones:**
 - Usa fuentes buscables (por ejemplo, `*os.File`, `*bytes.Reader`) al copiar a destinos no bloqueantes.
 - Para fuentes no buscables (por ejemplo, sockets de red), usa `CopyPolicy` con `PolicyRetry` para errores semánticos del lado de escritura. Esto garantiza que todos los bytes leídos se escriban antes de devolver, evitando la necesidad de rollback.
@@ -198,9 +203,12 @@ El valor por defecto es `nil`, lo que significa que se **preserva el comportamie
 
 - si `src` implementa `io.WriterTo`, `iox.Copy` llama a `WriteTo`
 - si no, si `dst` implementa `io.ReaderFrom`, `iox.Copy` llama a `ReadFrom`
-- si no, usa un buffer fijo en la pila (`32KiB`) y un bucle de lectura/escritura
+- si no, usa un buffer interno de tamaño fijo (`32KiB`) y un bucle de lectura/escritura
 
 Para preservar `ErrWouldBlock` / `ErrMore` en fast paths, asegúrate de que tus implementaciones de `WriteTo` / `ReadFrom` devuelvan esos errores cuando corresponda.
+Los fast paths también deben mantener una contabilidad de progreso correcta: el count devuelto es el número de bytes
+realmente transferidos, y los bytes restantes deben seguir disponibles para un retry posterior o estar representados por
+un error terminal real.
 
 Si tienes un `io.Reader`/`io.Writer` normal pero quieres que existan las interfaces de fast path *y* preservar la semántica, envuelve con:
 
