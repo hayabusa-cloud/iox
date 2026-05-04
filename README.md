@@ -56,6 +56,10 @@ To prevent data loss, `iox.Copy` attempts to roll back the source pointer:
 - If `src` implements `io.Seeker`, Copy calls `Seek(nw-nr, io.SeekCurrent)` to rewind the unwritten bytes.
 - If `src` does **not** implement `io.Seeker`, Copy returns `ErrNoSeeker` to signal that unwritten bytes are unrecoverable.
 
+This rollback guarantee applies to the generic read/write loop owned by `iox.Copy`. If the standard `io.WriterTo` or
+`io.ReaderFrom` fast path is selected, that fast-path implementation owns source advancement and partial-write recovery;
+it must preserve `ErrWouldBlock` / `ErrMore` and make retry safe for the bytes it reports as not yet transferred.
+
 **Recommendations:**
 - Use seekable sources (e.g., `*os.File`, `*bytes.Reader`) when copying to non-blocking destinations.
 - For non-seekable sources (e.g., network sockets), use `CopyPolicy` with `PolicyRetry` for write-side semantic errors. This ensures all read bytes are written before returning, avoiding the need for rollback.
@@ -197,9 +201,12 @@ to the caller and does not wait or retry on its own.
 
 - if `src` implements `io.WriterTo`, `iox.Copy` calls `WriteTo`
 - else if `dst` implements `io.ReaderFrom`, `iox.Copy` calls `ReadFrom`
-- else it uses a fixed-size stack buffer (`32KiB`) and a read/write loop
+- else it uses an internal fixed-size buffer (`32KiB`) and a read/write loop
 
 To preserve `ErrWouldBlock` / `ErrMore` across fast paths, ensure your `WriteTo` / `ReadFrom` implementations return those errors when appropriate.
+Fast paths must also keep their own progress accounting honest: the returned count is the number of bytes actually
+transferred, and any remaining bytes must still be available to a later retry or be represented by a real terminal
+error.
 
 If you have a plain `io.Reader`/`io.Writer` but want the fast-path interfaces to exist *and* preserve semantics, wrap with:
 

@@ -56,6 +56,9 @@ Go 的 `io.Reader` 契约允许 `Read` 返回 `(0, nil)` 来表示“没有进�
 - 如果 `src` 实现了 `io.Seeker`，Copy 调用 `Seek(nw-nr, io.SeekCurrent)` 来回退未写入的字节。
 - 如果 `src` **未**实现 `io.Seeker`，Copy 返回 `ErrNoSeeker` 以表明未写入的字节无法恢复。
 
+此回滚保证只适用于 `iox.Copy` 自己拥有的通用读/写循环。如果选择了标准 `io.WriterTo` 或 `io.ReaderFrom`
+快速路径，则该快速路径实现负责自己的源位置推进和部分写恢复；它必须保留 `ErrWouldBlock` / `ErrMore`，并保证按返回计数未传输的字节可在之后安全重试。
+
 **建议：**
 - 向非阻塞目标复制时，使用可寻址的源（如 `*os.File`、`*bytes.Reader`）。
 - 对于不可寻址的源（如网络套接字），使用 `CopyPolicy` 并为写入端语义错误配置 `PolicyRetry`。这可确保所有已读字节在返回前被写入，从而避免回滚需求。
@@ -198,9 +201,10 @@ for {
 
 - 如果 `src` 实现了 `io.WriterTo`，`iox.Copy` 调用 `WriteTo`
 - 否则如果 `dst` 实现了 `io.ReaderFrom`，`iox.Copy` 调用 `ReadFrom`
-- 否则使用固定大小的栈缓冲（`32KiB`）以及读/写循环
+- 否则使用内部固定大小缓冲（`32KiB`）以及读/写循环
 
 为了在快速路径上保持 `ErrWouldBlock` / `ErrMore`，请确保你的 `WriteTo` / `ReadFrom` 实现在合适的情况下返回这些错误。
+快速路径还必须保持自己的进度计数正确：返回的 count 是实际传输的字节数，剩余字节必须仍可在后续重试中取得，或者由真实的终止错误表示。
 
 如果你只有普通的 `io.Reader` / `io.Writer`，但希望存在快速路径接口并保持语义，可以用下面的包装器：
 

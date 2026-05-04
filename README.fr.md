@@ -56,6 +56,11 @@ Pour éviter la perte de données, `iox.Copy` tente de rembobiner le pointeur so
 - Si `src` implémente `io.Seeker`, Copy appelle `Seek(nw-nr, io.SeekCurrent)` pour rembobiner les octets non écrits.
 - Si `src` n'implémente **pas** `io.Seeker`, Copy retourne `ErrNoSeeker` pour signaler que les octets non écrits sont irrécupérables.
 
+Cette garantie de rollback s'applique à la boucle générique lecture/écriture contrôlée par `iox.Copy`. Si le fast path
+standard `io.WriterTo` ou `io.ReaderFrom` est sélectionné, cette implémentation est responsable de son propre avancement
+de source et de sa récupération d'écritures partielles ; elle doit préserver `ErrWouldBlock` / `ErrMore` et rendre le
+retry sûr pour les octets qu'elle n'a pas encore déclarés transférés.
+
 **Recommandations :**
 - Utilisez des sources seekables (p. ex., `*os.File`, `*bytes.Reader`) lors de la copie vers des destinations non bloquantes.
 - Pour les sources non seekables (p. ex., sockets réseau), utilisez `CopyPolicy` avec `PolicyRetry` pour les erreurs sémantiques côté écriture. Cela garantit que tous les octets lus sont écrits avant le retour, évitant le besoin de rollback.
@@ -198,9 +203,12 @@ La valeur par défaut est `nil`, ce qui signifie que le **comportement non bloqu
 
 - si `src` implémente `io.WriterTo`, `iox.Copy` appelle `WriteTo`
 - sinon, si `dst` implémente `io.ReaderFrom`, `iox.Copy` appelle `ReadFrom`
-- sinon, il utilise un buffer fixe sur la pile (`32KiB`) et une boucle lecture/écriture
+- sinon, il utilise un buffer interne de taille fixe (`32KiB`) et une boucle lecture/écriture
 
 Pour préserver `ErrWouldBlock` / `ErrMore` sur les fast paths, assurez-vous que vos implémentations `WriteTo` / `ReadFrom` retournent ces erreurs quand c’est approprié.
+Les fast paths doivent aussi garder une comptabilité de progression exacte : le count retourné est le nombre d'octets
+réellement transférés, et les octets restants doivent rester disponibles pour un retry ultérieur ou être représentés par
+une vraie erreur terminale.
 
 Si vous avez un `io.Reader`/`io.Writer` classique mais voulez exposer les interfaces fast-path *et* préserver la sémantique, enveloppez avec :
 

@@ -28,6 +28,14 @@ import (
 // using non-blocking destinations with non-seekable sources (e.g., sockets) should
 // use CopyPolicy with PolicyRetry to ensure all read bytes are written before
 // returning.
+//
+// Fast path boundary:
+//
+// If src implements io.WriterTo or dst implements io.ReaderFrom, Copy delegates
+// to that method, matching the standard io.Copy fast-path contract. In that
+// case the fast-path implementation owns its own source advancement and partial
+// write recovery; it must return ErrWouldBlock/ErrMore directly when those
+// semantic boundaries occur.
 func Copy(dst Writer, src Reader) (written int64, err error) {
 	return copyBuffer(dst, src, nil)
 }
@@ -50,6 +58,11 @@ func Copy(dst Writer, src Reader) (written int64, err error) {
 // For non-seekable sources (e.g., network sockets) where data integrity is
 // required, configure policy to return PolicyRetry for write-side semantic
 // errors. This guarantees forward progress without data loss.
+//
+// When a WriterTo/ReaderFrom fast path is selected, CopyPolicy can only observe
+// the aggregate (n, error) returned by that fast path. The fast-path method is
+// responsible for preserving semantic errors and for making retry safe across
+// partial progress.
 func CopyPolicy(dst Writer, src Reader, policy SemanticPolicy) (written int64, err error) {
 	if policy == nil {
 		return copyBuffer(dst, src, nil)
@@ -58,7 +71,7 @@ func CopyPolicy(dst Writer, src Reader, policy SemanticPolicy) (written int64, e
 }
 
 // CopyBuffer is like Copy but stages through buf if needed.
-// If buf is nil, a stack buffer is used.
+// If buf is nil, an internal fixed-size buffer is used.
 // If buf has zero length, CopyBuffer panics.
 //
 // Partial write recovery: same Seeker rollback semantics as Copy. Returns
@@ -146,7 +159,7 @@ func CopyNPolicy(dst Writer, src Reader, n int64, policy SemanticPolicy) (writte
 }
 
 // CopyNBuffer is like CopyN but stages through buf if needed.
-// If buf is nil, a stack buffer is used.
+// If buf is nil, an internal fixed-size buffer is used.
 // If buf has zero length, CopyNBuffer panics.
 func CopyNBuffer(dst Writer, src Reader, n int64, buf []byte) (written int64, err error) {
 	if n <= 0 {
@@ -224,7 +237,7 @@ func rollbackSeeker(src Reader, delta int) error {
 	return err
 }
 
-// Buffer is the default stack buffer used by Copy when none is supplied.
+// Buffer is the default fixed-size buffer type used by Copy when none is supplied.
 type Buffer [32 * 1024]byte
 
 func copyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
