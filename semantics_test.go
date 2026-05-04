@@ -25,14 +25,15 @@ func TestSemantics_ClassifyAndPredicates(t *testing.T) {
 		wantMore        bool
 		wantSemantic    bool
 		wantNonFailure  bool
+		wantFailure     bool
 		wantProgress    bool
 		wantOutcome     iox.Outcome
 		wantOutcomeText string
 	}{
-		{"nil", nil, false, false, false, true, true, iox.OutcomeOK, "OK"},
-		{"wouldblock", iox.ErrWouldBlock, true, false, true, true, false, iox.OutcomeWouldBlock, "WouldBlock"},
-		{"more", iox.ErrMore, false, true, true, true, true, iox.OutcomeMore, "More"},
-		{"sentinelErr", sentinelErr, false, false, false, false, false, iox.OutcomeFailure, "Failure"},
+		{"nil", nil, false, false, false, true, false, true, iox.OutcomeOK, "OK"},
+		{"wouldblock", iox.ErrWouldBlock, true, false, true, true, false, false, iox.OutcomeWouldBlock, "WouldBlock"},
+		{"more", iox.ErrMore, false, true, true, true, false, true, iox.OutcomeMore, "More"},
+		{"sentinelErr", sentinelErr, false, false, false, false, true, false, iox.OutcomeFailure, "Failure"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -47,6 +48,9 @@ func TestSemantics_ClassifyAndPredicates(t *testing.T) {
 			}
 			if got := iox.IsNonFailure(tc.err); got != tc.wantNonFailure {
 				t.Fatalf("IsNonFailure=%v", got)
+			}
+			if got := iox.IsFailure(tc.err); got != tc.wantFailure {
+				t.Fatalf("IsFailure=%v", got)
 			}
 			if got := iox.IsProgress(tc.err); got != tc.wantProgress {
 				t.Fatalf("IsProgress=%v", got)
@@ -164,4 +168,11 @@ func TestOutcomeStringAndClassify(t *testing.T) {
 			t.Fatalf("Classify(other)=%v", got)
 		}
 	})
+}
+
+func TestClassify_WrappedErrMoreIsOutcomeMore(t *testing.T) {
+	err := fmt.Errorf("transport completion: %w", iox.ErrMore)
+	if got := iox.Classify(err); got != iox.OutcomeMore {
+		t.Fatalf("Classify(wrapped ErrMore)=%v", got)
+	}
 }

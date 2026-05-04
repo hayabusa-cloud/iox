@@ -9,6 +9,8 @@ import (
 )
 
 // Outcome classifies an operation result based on iox's extended semantics.
+// Its numeric encoding is defensive, not an ordering; use switches, Classify,
+// and predicate helpers instead of numeric comparison.
 //
 // OutcomeOK:            success, no more to come.
 // OutcomeWouldBlock:    no progress is possible right now; retry later.
@@ -55,12 +57,19 @@ func IsSemantic(err error) bool { return IsWouldBlock(err) || IsMore(err) }
 // error or tearing down the operation.
 func IsNonFailure(err error) bool { return err == nil || IsSemantic(err) }
 
+// IsFailure reports whether err is an actual failure rather than nil or an iox
+// semantic control signal.
+func IsFailure(err error) bool { return err != nil && !IsSemantic(err) }
+
 // IsProgress reports whether the current call produced usable progress now:
 // returns true for nil and ErrMore. In both cases caller can proceed with
 // delivered data/work; for ErrMore keep polling for subsequent completions.
 func IsProgress(err error) bool { return err == nil || IsMore(err) }
 
 // Classify maps err to an Outcome. Use when a compact switch is preferred.
+//
+// Classify accepts wrapped semantic sentinels through errors.Is. Internal
+// hot-path engines may still require exact sentinel identity for policy dispatch.
 //
 // Note: This does not attempt to reinterpret standard library sentinels like
 // io.EOF; classification depends solely on the error value the caller passes.
