@@ -28,7 +28,7 @@ jobs:
 
       - name: Test (race + coverage)
         run: |
-          go test -race -covermode=atomic -coverprofile=coverage.out ./...
+          go test -race -covermode=atomic -coverprofile=coverage.out -timeout 120s ./...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
