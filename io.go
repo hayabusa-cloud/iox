@@ -110,6 +110,11 @@ func CopyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 // iox semantics extension:
 //   - ErrWouldBlock / ErrMore may be returned when progress stops early;
 //     written may be > 0 and is the number of bytes already copied.
+//
+// CopyN is a bounded "copy exactly n bytes" operation. If written == n, it
+// returns nil at that abstraction boundary even when the lower layer might have
+// a separate live continuation. Keep subscription or multi-shot route lifecycle
+// ownership above iox.
 func CopyN(dst Writer, src Reader, n int64) (written int64, err error) {
 	if n <= 0 {
 		return 0, nil

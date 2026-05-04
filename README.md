@@ -35,18 +35,19 @@ For operations that adopt `iox` semantics:
 | `ErrMore` | progress happened; more completions will follow | process now; keep the operation active; continue polling |
 | other error | failure | handle/log/close/backoff as appropriate |
 
+Always process the returned count before interpreting the returned error. The count reports progress already made; the error selects the next control action.
+
 Notes:
 - `iox.Copy` may return `(written > 0, ErrWouldBlock)` or `(written > 0, ErrMore)` to report partial progress before stalling or before delivering a multi-shot continuation.
 - `(0, nil)` reads are treated as “stop copying now” and return `(written, nil)` to avoid hidden spinning inside helpers.
+- `CopyN`, `CopyNBuffer`, and their policy variants are bounded "copy exactly n bytes" operations. Once `written == n`, they return `nil`; they are not subscription or multi-shot route lifecycle APIs.
+- `Outcome` numeric values are defensive encodings, not a semantic order. Use `switch`, `Classify`, and predicates instead of `<`, `>`, `min`, or `max`.
 
 ### Note: `iox.Copy` and `(0, nil)` reads
 
-The Go `io.Reader` contract allows `Read` to return `(0, nil)` to mean “no progress”, not end-of-stream.
-Well-behaved Readers should avoid `(0, nil)` except when `len(p) == 0`.
+The Go `io.Reader` contract allows `Read` to return `(0, nil)` to mean “no progress”, not end-of-stream. Well-behaved Readers should avoid `(0, nil)` except when `len(p) == 0`.
 
-`iox.Copy` intentionally treats a `(0, nil)` read as “stop copying now” and returns `(written, nil)`.
-This avoids hidden spinning inside a helper in non-blocking/event-loop code.
-If you need strict forward-progress detection across repeated `(0, nil)`, implement that policy at your call site.
+`iox.Copy` intentionally treats a `(0, nil)` read as “stop copying now” and returns `(written, nil)`. This avoids hidden spinning inside a helper in non-blocking/event-loop code. If you need strict forward-progress detection across repeated `(0, nil)`, implement that policy at your call site.
 
 ### Note: `iox.Copy` and partial write recovery
 
@@ -56,9 +57,7 @@ To prevent data loss, `iox.Copy` attempts to roll back the source pointer:
 - If `src` implements `io.Seeker`, Copy calls `Seek(nw-nr, io.SeekCurrent)` to rewind the unwritten bytes.
 - If `src` does **not** implement `io.Seeker`, Copy returns `ErrNoSeeker` to signal that unwritten bytes are unrecoverable.
 
-This rollback guarantee applies to the generic read/write loop owned by `iox.Copy`. If the standard `io.WriterTo` or
-`io.ReaderFrom` fast path is selected, that fast-path implementation owns source advancement and partial-write recovery;
-it must preserve `ErrWouldBlock` / `ErrMore` and make retry safe for the bytes it reports as not yet transferred.
+This rollback guarantee applies to the generic read/write loop owned by `iox.Copy`. If the standard `io.WriterTo` or `io.ReaderFrom` fast path is selected, that fast-path implementation owns source advancement and partial-write recovery; it must preserve `ErrWouldBlock` / `ErrMore` and make retry safe for the bytes it reports as not yet transferred.
 
 **Recommendations:**
 - Use seekable sources (e.g., `*os.File`, `*bytes.Reader`) when copying to non-blocking destinations.
@@ -110,6 +109,31 @@ func main() {
 }
 ```
 
+## Canonical control loop
+
+Callers should handle progress first, then classify control with the package helpers:
+
+```go
+for {
+	n, err := op()
+	if n > 0 {
+		consume(n)
+	}
+
+	switch {
+	case err == nil:
+		return nil
+	case iox.IsMore(err):
+		continue
+	case iox.IsWouldBlock(err):
+		wait()
+		continue
+	default:
+		return err
+	}
+}
+```
+
 ## API overview
 
 - Errors
@@ -130,7 +154,11 @@ func main() {
   - `AsReaderFrom(w Writer) Writer` (adds `io.ReaderFrom` via `iox.Copy`)
 
 - Semantics
+  - `Outcome`
+  - `Classify(err error) Outcome`
+  - `IsSemantic(err error) bool`
   - `IsNonFailure(err error) bool`
+  - `IsFailure(err error) bool`
   - `IsWouldBlock(err error) bool`
   - `IsMore(err error) bool`
   - `IsProgress(err error) bool`
@@ -157,16 +185,16 @@ When `ErrWouldBlock` signals that no progress is possible, the caller must wait 
 var b iox.Backoff  // uses DefaultBackoffBase (500µs) and DefaultBackoffMax (100ms)
 
 for {
-    n, err := conn.Read(buf)
-    if err == iox.ErrWouldBlock {
-        b.Wait()  // adaptive sleep with jitter
-        continue
-    }
-    if err != nil {
-        return err
-    }
-    process(buf[:n])
-    b.Reset()  // reset on successful progress
+	n, err := conn.Read(buf)
+	if iox.IsWouldBlock(err) {
+		b.Wait() // adaptive sleep with jitter
+		continue
+	}
+	if err != nil {
+		return err
+	}
+	process(buf[:n])
+	b.Reset() // reset on successful progress
 }
 ```
 
@@ -189,11 +217,15 @@ for {
 
 ## Semantic Policy
 
-Some helpers accept an optional `SemanticPolicy` to decide what to do when they encounter `ErrWouldBlock` or `ErrMore`
-(e.g., return immediately vs yield and retry).
+Some helpers accept an optional `SemanticPolicy` to decide what to do when they encounter `ErrWouldBlock` or `ErrMore` (e.g., return immediately vs yield and retry).
 
-The default is `nil`, which means **non-blocking behavior is preserved**: the helper returns `ErrWouldBlock` / `ErrMore`
-to the caller and does not wait or retry on its own.
+The default is `nil`, which means **non-blocking behavior is preserved**: the helper returns `ErrWouldBlock` / `ErrMore` to the caller and does not wait or retry on its own.
+
+## Classification and exact sentinel dispatch
+
+Classification helpers (`IsMore`, `IsWouldBlock`, `IsSemantic`, `IsNonFailure`, `IsFailure`, and `Classify`) use `errors.Is`, so wrapped semantic sentinels classify correctly at API boundaries and in diagnostics. Prefer these helpers over direct `errors.Is` calls when classifying `iox` semantic-control outcomes.
+
+Internal copy and tee hot paths dispatch policy decisions by exact sentinel identity. Producers under your control should return `ErrMore` and `ErrWouldBlock` unwrapped on those paths. A wrapped semantic error is still returned and classifiable, but it does not trigger exact-sentinel policy retry.
 
 ## Fast paths and semantic preservation
 
@@ -203,10 +235,7 @@ to the caller and does not wait or retry on its own.
 - else if `dst` implements `io.ReaderFrom`, `iox.Copy` calls `ReadFrom`
 - else it uses an internal fixed-size buffer (`32KiB`) and a read/write loop
 
-To preserve `ErrWouldBlock` / `ErrMore` across fast paths, ensure your `WriteTo` / `ReadFrom` implementations return those errors when appropriate.
-Fast paths must also keep their own progress accounting honest: the returned count is the number of bytes actually
-transferred, and any remaining bytes must still be available to a later retry or be represented by a real terminal
-error.
+To preserve `ErrWouldBlock` / `ErrMore` across fast paths, ensure your `WriteTo` / `ReadFrom` implementations return those errors when appropriate. Fast paths must also keep their own progress accounting honest: the returned count is the number of bytes actually transferred, and any remaining bytes must still be available to a later retry or be represented by a real terminal error.
 
 If you have a plain `io.Reader`/`io.Writer` but want the fast-path interfaces to exist *and* preserve semantics, wrap with:
 

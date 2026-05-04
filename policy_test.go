@@ -155,6 +155,28 @@ func TestCopyPolicy_WriterTo_More_Returns(t *testing.T) {
 		t.Fatalf("want (7, ErrMore) got (%d, %v)", n, err)
 	}
 }
+
+func TestCopyPolicy_WrappedErrMoreIsReturnedNotRetried(t *testing.T) {
+	wrapped := fmt.Errorf("wrapped: %w", iox.ErrMore)
+	var src scriptedWT
+	src.seq = append(src.seq, struct {
+		n   int64
+		err error
+	}{n: 7, err: wrapped})
+	var dst bytes.Buffer
+	p := &recPolicy{onMore: map[iox.Op]iox.PolicyAction{iox.OpCopyWriterTo: iox.PolicyRetry}}
+
+	n, err := iox.CopyPolicy(&dst, &src, p)
+	if !errors.Is(err, iox.ErrMore) || n != 7 {
+		t.Fatalf("want (7, wrapped ErrMore) got (%d, %v)", n, err)
+	}
+	if err == iox.ErrMore {
+		t.Fatalf("wrapped ErrMore was normalized to sentinel")
+	}
+	if len(p.yields) != 0 || src.i != 1 {
+		t.Fatalf("wrapped ErrMore must not trigger exact-sentinel retry, yields=%v calls=%d", p.yields, src.i)
+	}
+}
 func TestCopyPolicy_ReaderFrom_WouldBlock_RetryCompletes(t *testing.T) {
 	var dst scriptedRF
 	dst.seq = append(dst.seq,
