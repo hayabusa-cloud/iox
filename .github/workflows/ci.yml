@@ -11,15 +11,16 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       matrix:
-        go-version: [ 'stable', '1.26.x' ]
+        go-version: [ '1.26.x', 'stable' ]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -31,7 +32,7 @@ jobs:
           go test -race -covermode=atomic -coverprofile=coverage.out -timeout 120s ./...
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: coverage.out
           fail_ci_if_error: true
