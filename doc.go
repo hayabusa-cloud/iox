@@ -28,9 +28,11 @@
 //
 // Classification helpers such as IsMore, IsWouldBlock, IsSemantic,
 // IsNonFailure, IsFailure, and Classify accept wrapped semantic sentinels
-// through errors.Is. Internal hot-path engines dispatch policy decisions by
-// exact sentinel identity; package-controlled producers on those paths must
-// return ErrMore and ErrWouldBlock unwrapped.
+// through errors.Is. Callers should prefer these helpers over direct errors.Is
+// checks when classifying iox semantic-control outcomes. Internal hot-path
+// engines dispatch policy decisions by exact sentinel identity;
+// package-controlled producers on those paths must return ErrMore and
+// ErrWouldBlock unwrapped.
 //
 // These semantics propagate through Copy/CopyN and Tee helpers. CopyN,
 // CopyNBuffer, and their policy variants are bounded "copy exactly n bytes"
