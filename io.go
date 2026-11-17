@@ -273,8 +273,8 @@ func copyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 		return written, err
 	}
 
-	var local Buffer
 	if buf == nil {
+		var local Buffer
 		buf = local[:]
 	}
 
@@ -384,8 +384,8 @@ func copyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 		}
 	}
 
-	var local Buffer
 	if buf == nil {
+		var local Buffer
 		buf = local[:]
 	}
 

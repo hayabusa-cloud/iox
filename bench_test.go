@@ -128,6 +128,37 @@ func BenchmarkCopyBuffer_SlowPath(b *testing.B) {
 	}
 }
 
+// BenchmarkCopyBufferReuse excludes endpoint and scratch construction and
+// compares generic paths on ordinary EOF-terminated input.
+func BenchmarkCopyBufferReuse(b *testing.B) {
+	for _, variant := range []struct {
+		name string
+		copy func(io.Writer, io.Reader, []byte) (int64, error)
+	}{
+		{"iox", iox.CopyBuffer},
+		{"ioxPolicy", func(w io.Writer, r io.Reader, buf []byte) (int64, error) {
+			return iox.CopyBufferPolicy(w, r, buf, iox.ReturnPolicy{})
+		}},
+		{"io", io.CopyBuffer},
+	} {
+		for _, size := range []int{1 << 10, 32 << 10, 1 << 20} {
+			b.Run(variant.name+"/"+byteSize(size), func(b *testing.B) {
+				src := &benchReader{data: bytes.Repeat([]byte{'x'}, size)}
+				buf := make([]byte, 32*1024)
+				b.SetBytes(int64(size))
+				b.ReportAllocs()
+				for b.Loop() {
+					src.off = 0
+					n, err := variant.copy(devNull{}, src, buf)
+					if n != int64(size) || err != nil {
+						b.Fatalf("copy = (%d, %v), want (%d, nil)", n, err, size)
+					}
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkCopy_WriterTo(b *testing.B) {
 	sizes := []int{1 << 10, 32 << 10, 1 << 20}
 	for _, size := range sizes {
