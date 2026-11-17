@@ -13,7 +13,7 @@ const (
 	// It matches the expected scale of local-network round-trip times.
 	DefaultBackoffBase = 500 * time.Microsecond
 
-	// DefaultBackoffMax is the default ceiling for sleep duration (100ms).
+	// DefaultBackoffMax is the default duration cap before jitter (100ms).
 	DefaultBackoffMax = 100 * time.Millisecond
 )
 
@@ -77,9 +77,11 @@ func (b *Backoff) applyJitter(d time.Duration) time.Duration {
 }
 
 // SetBase configures the initial duration and linear scaling factor.
+// d must be positive. The current block is preserved.
 func (b *Backoff) SetBase(d time.Duration) { b.base = d }
 
-// SetMax configures the maximum allowed sleep duration.
+// SetMax configures the duration cap before jitter.
+// d must be positive. The current block is preserved.
 func (b *Backoff) SetMax(d time.Duration) { b.max = d }
 
 // Reset restores the backoff state to block 1.
