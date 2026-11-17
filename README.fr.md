@@ -126,10 +126,10 @@ for {
 	switch {
 	case err == nil:
 		return nil
-	case iox.IsMore(err):
-		continue
 	case iox.IsWouldBlock(err):
 		wait()
+		continue
+	case iox.IsMore(err):
 		continue
 	default:
 		return err
