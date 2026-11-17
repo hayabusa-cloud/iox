@@ -183,21 +183,25 @@ for {
 **零值即可使用：**
 
 ```go
-var b iox.Backoff  // 使用 DefaultBackoffBase (500µs) 和 DefaultBackoffMax (100ms)
+var b iox.Backoff // 使用 DefaultBackoffBase (500µs) 和 DefaultBackoffMax (100ms)
 
 for {
 	n, err := conn.Read(buf)
+	if n > 0 {
+		process(buf[:n])
+		b.Reset() // 成功进展后重置
+	}
 	if iox.IsWouldBlock(err) {
 		b.Wait() // 带抖动的自适应等待
 		continue
 	}
-	if err != nil {
+	if err != nil || n == 0 {
 		return err
 	}
-	process(buf[:n])
-	b.Reset() // 成功进展后重置
 }
 ```
+
+先处理返回的字节，再等待或返回。此循环原样传播 `ErrMore`，遇到 `(0, nil)` 时将控制权交还调用方，而不将其视为 EOF。
 
 **算法：** 基于块的线性扩展，带 ±12.5% 抖动以防止惊群效应。
 

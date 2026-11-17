@@ -182,21 +182,25 @@ When `ErrWouldBlock` signals that no progress is possible, the caller must wait 
 **Zero-value ready to use:**
 
 ```go
-var b iox.Backoff  // uses DefaultBackoffBase (500µs) and DefaultBackoffMax (100ms)
+var b iox.Backoff // uses DefaultBackoffBase (500µs) and DefaultBackoffMax (100ms)
 
 for {
 	n, err := conn.Read(buf)
+	if n > 0 {
+		process(buf[:n])
+		b.Reset() // reset on successful progress
+	}
 	if iox.IsWouldBlock(err) {
 		b.Wait() // adaptive sleep with jitter
 		continue
 	}
-	if err != nil {
+	if err != nil || n == 0 {
 		return err
 	}
-	process(buf[:n])
-	b.Reset() // reset on successful progress
 }
 ```
+
+Process any returned bytes before waiting or returning. This loop propagates `ErrMore` unchanged and returns control on `(0, nil)` without treating it as EOF.
 
 **Algorithm:** Block-based linear scaling with ±12.5% jitter to prevent thundering herds.
 - Block 1: 1 sleep of `base`

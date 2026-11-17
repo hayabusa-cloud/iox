@@ -185,21 +185,25 @@ Quand `ErrWouldBlock` signale qu'aucun progrès n'est possible, l'appelant doit 
 **Valeur zéro prête à l'emploi :**
 
 ```go
-var b iox.Backoff  // utilise DefaultBackoffBase (500µs) et DefaultBackoffMax (100ms)
+var b iox.Backoff // utilise DefaultBackoffBase (500µs) et DefaultBackoffMax (100ms)
 
 for {
 	n, err := conn.Read(buf)
+	if n > 0 {
+		process(buf[:n])
+		b.Reset() // réinitialiser après une progression réussie
+	}
 	if iox.IsWouldBlock(err) {
 		b.Wait() // attente adaptative avec jitter
 		continue
 	}
-	if err != nil {
+	if err != nil || n == 0 {
 		return err
 	}
-	process(buf[:n])
-	b.Reset() // réinitialiser après une progression réussie
 }
 ```
+
+Traitez les octets renvoyés avant d'attendre ou de retourner. Cette boucle propage `ErrMore` sans modification et rend le contrôle sur `(0, nil)` sans l'interpréter comme EOF.
 
 **Algorithme :** Mise à l'échelle linéaire par blocs avec ±12.5% de jitter pour éviter les effets de ruée.
 

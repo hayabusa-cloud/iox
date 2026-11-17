@@ -183,21 +183,25 @@ for {
 **ゼロ値のまますぐ使用可能：**
 
 ```go
-var b iox.Backoff  // DefaultBackoffBase (500µs) と DefaultBackoffMax (100ms) を使用
+var b iox.Backoff // DefaultBackoffBase (500µs) と DefaultBackoffMax (100ms) を使用
 
 for {
 	n, err := conn.Read(buf)
+	if n > 0 {
+		process(buf[:n])
+		b.Reset() // 進捗成功後にリセット
+	}
 	if iox.IsWouldBlock(err) {
 		b.Wait() // ジッター付きの適応型待機
 		continue
 	}
-	if err != nil {
+	if err != nil || n == 0 {
 		return err
 	}
-	process(buf[:n])
-	b.Reset() // 進捗成功後にリセット
 }
 ```
+
+待機やリターンの前に、返されたバイト列を処理します。このループは `ErrMore` をそのまま返し、`(0, nil)` の場合は EOF と解釈せず呼び出し側に制御を戻します。
 
 **アルゴリズム：** ブロックベースの線形スケーリング、±12.5% のジッター付き（待機の集中を防止）。
 
