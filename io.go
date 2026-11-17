@@ -115,6 +115,10 @@ func CopyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 // returns nil at that abstraction boundary even when the lower layer might have
 // a separate live continuation. Keep subscription or multi-shot route lifecycle
 // ownership above iox.
+//
+// The generic copy loop preserves Copy's partial-write recovery for seekable
+// sources. After a semantic error, retry with n-written bytes. A destination
+// ReaderFrom implementation owns its own recovery, as described in Copy.
 func CopyN(dst Writer, src Reader, n int64) (written int64, err error) {
 	if n <= 0 {
 		return 0, nil
@@ -234,6 +238,14 @@ func (l *limitedReader) Read(p []byte) (n int, err error) {
 // rollbackSeeker attempts to rewind src by delta bytes if it implements io.Seeker.
 // Returns nil on success, ErrNoSeeker if src is not seekable, or the seek error.
 func rollbackSeeker(src Reader, delta int) error {
+	if lr, ok := src.(*limitedReader); ok {
+		if err := rollbackSeeker(lr.R, delta); err != nil {
+			return err
+		}
+		// Restore the unread budget together with the underlying cursor.
+		lr.N -= int64(delta)
+		return nil
+	}
 	seeker, ok := src.(io.Seeker)
 	if !ok {
 		return ErrNoSeeker
