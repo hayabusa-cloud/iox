@@ -13,8 +13,8 @@ import (
 // iox semantics extension:
 //   - ErrWouldBlock: return immediately because the next step would block.
 //     written may be > 0 (partial progress); retry after readiness/completion.
-//   - ErrMore: return immediately because progress happened and the operation remains active;
-//     written may be > 0; keep polling for more completions.
+//   - ErrMore: return immediately because the operation remains active;
+//     written may be zero or positive; keep polling for more completions.
 //
 // Partial write recovery (Seeker rollback):
 //

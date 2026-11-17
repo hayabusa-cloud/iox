@@ -34,6 +34,11 @@ func TestSemantics_ClassifyAndPredicates(t *testing.T) {
 		{"wouldblock", iox.ErrWouldBlock, true, false, true, true, false, false, iox.OutcomeWouldBlock, "WouldBlock"},
 		{"more", iox.ErrMore, false, true, true, true, false, true, iox.OutcomeMore, "More"},
 		{"sentinelErr", sentinelErr, false, false, false, false, true, false, iox.OutcomeFailure, "Failure"},
+		{"joined-block-more", errors.Join(iox.ErrWouldBlock, iox.ErrMore), true, true, true, true, false, false, iox.OutcomeWouldBlock, "WouldBlock"},
+		{"joined-more-block", errors.Join(iox.ErrMore, iox.ErrWouldBlock), true, true, true, true, false, false, iox.OutcomeWouldBlock, "WouldBlock"},
+		{"nested-joined", fmt.Errorf("wrap: %w", errors.Join(iox.ErrMore, iox.ErrWouldBlock)), true, true, true, true, false, false, iox.OutcomeWouldBlock, "WouldBlock"},
+		{"custom-match", overlappingControl{}, true, true, true, true, false, false, iox.OutcomeWouldBlock, "WouldBlock"},
+		{"joined-more-failure", errors.Join(iox.ErrMore, sentinelErr), false, true, true, true, false, true, iox.OutcomeMore, "More"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,8 +66,24 @@ func TestSemantics_ClassifyAndPredicates(t *testing.T) {
 			if s := iox.Classify(tc.err).String(); s != tc.wantOutcomeText {
 				t.Fatalf("Outcome.String()=%q", s)
 			}
+			var progress bool
+			if allocs := testing.AllocsPerRun(100, func() {
+				progress = iox.IsProgress(tc.err)
+			}); allocs != 0 {
+				t.Fatalf("IsProgress allocated %g times", allocs)
+			}
+			if progress != tc.wantProgress {
+				t.Fatal("repeated IsProgress changed classification")
+			}
 		})
 	}
+}
+
+type overlappingControl struct{}
+
+func (overlappingControl) Error() string { return "overlapping control" }
+func (overlappingControl) Is(target error) bool {
+	return target == iox.ErrWouldBlock || target == iox.ErrMore
 }
 
 func TestSemantics_WrappedErrors(t *testing.T) {

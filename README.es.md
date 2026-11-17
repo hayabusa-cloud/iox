@@ -11,12 +11,12 @@ Idioma: [English](./README.md) | [简体中文](./README.zh-CN.md) | **Español*
 
 ## Descripción general
 
-`iox` está diseñado para pilas de E/S no bloqueantes donde “sin progreso ahora” y “progreso ahora, pero la operación sigue activa” son **flujo de control normal**, no fallos.
+`iox` está diseñado para pilas de E/S no bloqueantes donde “seguir avanzando requiere disponibilidad” y “la operación sigue activa” son **flujo de control normal**, no fallos.
 
 Introduce dos errores semánticos con contratos explícitos:
 
-- `ErrWouldBlock` — **no es posible progresar ahora** sin esperar señales de disponibilidad o finalización. Devuelve de inmediato; reintenta tras el siguiente sondeo.
-- `ErrMore` — **hubo progreso** y la operación sigue activa; **llegarán más eventos**. Procesa el resultado actual y continúa sondeando.
+- `ErrWouldBlock` — **no es posible seguir avanzando** sin esperar señales de disponibilidad o finalización. Devuelve de inmediato; reintenta tras el siguiente sondeo.
+- `ErrMore` — **la operación sigue activa** y se esperan observaciones posteriores. El conteo puede ser cero; procesa los datos devueltos y continúa sondeando.
 
 `iox` mantiene intactos los modelos mentales estándar de `io`:
 
@@ -31,8 +31,8 @@ Para operaciones que adopten la semántica de `iox`:
 | Error devuelto  | Significado                                            | Qué debe hacer el llamador a continuación                       |
 |-----------------|--------------------------------------------------------|-----------------------------------------------------------------|
 | `nil`           | completado con éxito para esta llamada / transferencia | continúa tu máquina de estados                                  |
-| `ErrWouldBlock` | no hay progreso posible ahora                          | deja de intentar; espera disponibilidad/finalización; reintenta |
-| `ErrMore`       | hubo progreso; seguirán más finalizaciones             | procesa ahora; mantén la operación activa; continúa el sondeo   |
+| `ErrWouldBlock` | seguir avanzando requiere disponibilidad | deja de intentar; espera disponibilidad/finalización; reintenta |
+| `ErrMore`       | la operación sigue activa; el conteo puede ser cero | procesa los datos devueltos; mantén la operación activa; continúa el sondeo |
 | otro error      | fallo                                                  | maneja/registra/cierra/aplica retroceso según corresponda       |
 
 Procesa siempre el conteo devuelto antes de interpretar el error devuelto. El conteo informa el progreso ya realizado; el error selecciona la siguiente acción de control.
@@ -228,6 +228,8 @@ El valor por defecto es `nil`, lo que significa que se **preserva el comportamie
 ## Clasificación y despacho por centinela exacto
 
 Las funciones auxiliares de clasificación (`IsMore`, `IsWouldBlock`, `IsSemantic`, `IsNonFailure`, `IsFailure` y `Classify`) usan `errors.Is`, por lo que los centinelas semánticos envueltos se clasifican correctamente en límites de API y diagnóstico. Prefiere estas funciones auxiliares a llamadas directas a `errors.Is` al clasificar resultados de control semántico de `iox`.
+
+`IsProgress` es true solo cuando `Classify` selecciona `OutcomeOK` u `OutcomeMore`. Si un error coincide con ambos centinelas semánticos, `ErrWouldBlock` tiene prioridad e `IsProgress` es false. `IsMore` e `IsWouldBlock` comprueban la coincidencia con cada centinela, por lo que ambos pueden ser true para el mismo error. Estos predicados no miden el progreso en bytes; contabiliza siempre los conteos devueltos por separado.
 
 Las rutas rápidas internas de copy y tee despachan decisiones de política por identidad exacta del centinela. Los productores bajo tu control deberían devolver `ErrMore` y `ErrWouldBlock` sin envolver en esas rutas. Un error semántico envuelto se devuelve y sigue siendo clasificable, pero no activa el reintento de política basado en centinelas exactos.
 

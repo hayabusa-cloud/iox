@@ -23,8 +23,8 @@
 // Extended result semantics
 //   - ErrWouldBlock: the operation cannot make progress now without waiting.
 //     Return immediately; retry later.
-//   - ErrMore: the current completion made progress and more completions will
-//     follow (multi‑shot style). Process now, keep polling for more.
+//   - ErrMore: the operation remains active and more observations are expected.
+//     The count may be zero. Process any returned data and keep polling.
 //
 // Classification helpers such as IsMore, IsWouldBlock, IsSemantic,
 // IsNonFailure, IsFailure, and Classify accept wrapped semantic sentinels
@@ -33,6 +33,9 @@
 // engines dispatch policy decisions by exact sentinel identity;
 // package-controlled producers on those paths must return ErrMore and
 // ErrWouldBlock unwrapped.
+// IsProgress follows Classify: an error matching both semantic sentinels
+// classifies as OutcomeWouldBlock and is not progress control. IsMore and
+// IsWouldBlock report sentinel membership, so both may be true for that error.
 //
 // These semantics propagate through Copy/CopyN and Tee helpers. CopyN,
 // CopyNBuffer, and their policy variants are bounded "copy exactly n bytes"

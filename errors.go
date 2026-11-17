@@ -15,7 +15,7 @@ import "errors"
 // Notes:
 //   - ErrWouldBlock and ErrMore are expected control flow; treat them like
 //     readiness/completion states, not failures.
-//   - Either may help partial progress: counts first, semantics second.
+//   - Either may accompany partial progress: counts first, semantics second.
 
 // ErrWouldBlock means “no further progress without waiting”.
 // Linux analogy: EAGAIN/EWOULDBLOCK / not-ready / no completion available.

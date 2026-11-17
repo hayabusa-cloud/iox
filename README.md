@@ -11,12 +11,12 @@ Language: **English** | [简体中文](./README.zh-CN.md) | [Español](./README.
 
 ## Overview
 
-`iox` is for non-blocking I/O stacks where “no progress right now” and “progress now, but the operation remains active” are **normal control flow**, not failures.
+`iox` is for non-blocking I/O stacks where “further progress requires readiness” and “the operation remains active” are **normal control flow**, not failures.
 
 It introduces two semantic errors with explicit contracts:
 
-- `ErrWouldBlock` — **no progress is possible now** without waiting for readiness/completions. Return immediately; retry after your next polling.
-- `ErrMore` — **progress happened** and the operation remains active; **more events will follow**. Process the current result and keep polling.
+- `ErrWouldBlock` — **no further progress is possible** without waiting for readiness/completions. Return immediately; retry after your next polling.
+- `ErrMore` — **the operation remains active** and further observations are expected. The count may be zero; process any returned data and keep polling.
 
 `iox` keeps standard `io` mental models intact:
 
@@ -31,8 +31,8 @@ For operations that adopt `iox` semantics:
 | Return error | Meaning | What the caller must do next |
 |---|---|---|
 | `nil` | completed successfully for this call / transfer | continue your state machine |
-| `ErrWouldBlock` | no progress possible now | stop attempting; wait for readiness/completion; retry |
-| `ErrMore` | progress happened; more completions will follow | process now; keep the operation active; continue polling |
+| `ErrWouldBlock` | further progress requires readiness | stop attempting; wait for readiness/completion; retry |
+| `ErrMore` | operation remains active; count may be zero | process returned data; keep the operation active; continue polling |
 | other error | failure | handle/log/close/backoff as appropriate |
 
 Always process the returned count before interpreting the returned error. The count reports progress already made; the error selects the next control action.
@@ -224,6 +224,8 @@ The default is `nil`, which means **non-blocking behavior is preserved**: the he
 ## Classification and exact sentinel dispatch
 
 Classification helpers (`IsMore`, `IsWouldBlock`, `IsSemantic`, `IsNonFailure`, `IsFailure`, and `Classify`) use `errors.Is`, so wrapped semantic sentinels classify correctly at API boundaries and in diagnostics. Prefer these helpers over direct `errors.Is` calls when classifying `iox` semantic-control outcomes.
+
+`IsProgress` is true only when `Classify` selects `OutcomeOK` or `OutcomeMore`. If an error matches both semantic sentinels, `ErrWouldBlock` takes precedence and `IsProgress` is false. `IsMore` and `IsWouldBlock` report sentinel membership, so both may be true for the same error. These predicates do not measure byte progress; always account for returned counts separately.
 
 Internal copy and tee hot paths dispatch policy decisions by exact sentinel identity. Producers under your control should return `ErrMore` and `ErrWouldBlock` unwrapped on those paths. A wrapped semantic error is still returned and classifiable, but it does not trigger exact-sentinel policy retry.
 

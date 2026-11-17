@@ -11,12 +11,12 @@ Langue : [English](./README.md) | [简体中文](./README.zh-CN.md) | [Español]
 
 ## Aperçu
 
-`iox` vise les piles d'E/S non bloquantes où « aucun progrès maintenant » et « progrès maintenant, mais l'opération reste active » sont un **flux de contrôle normal**, pas des échecs.
+`iox` vise les piles d'E/S non bloquantes où « poursuivre nécessite un signal de disponibilité » et « l'opération reste active » sont un **flux de contrôle normal**, pas des échecs.
 
 Il introduit deux erreurs sémantiques avec des contrats explicites :
 
-- `ErrWouldBlock` — **aucun progrès n'est possible maintenant** sans attendre un signal de disponibilité ou de complétion. Retourner immédiatement ; réessayer après le prochain sondage.
-- `ErrMore` — **du progrès a eu lieu** et l'opération reste active ; **d'autres événements suivront**. Traiter le résultat courant et continuer le sondage.
+- `ErrWouldBlock` — **aucun progrès supplémentaire n'est possible** sans attendre un signal de disponibilité ou de complétion. Retourner immédiatement ; réessayer après le prochain sondage.
+- `ErrMore` — **l'opération reste active** et des observations ultérieures sont attendues. Le compteur peut être nul ; traiter les données retournées et continuer le sondage.
 
 `iox` conserve les modèles mentaux standard de `io` :
 
@@ -31,8 +31,8 @@ Pour les opérations qui adoptent la sémantique `iox` :
 | Erreur retournée | Signification                                        | Ce que l’appelant doit faire ensuite                                  |
 |------------------|------------------------------------------------------|-----------------------------------------------------------------------|
 | `nil`            | terminé avec succès pour cet appel / transfert       | continuer votre machine à états                                       |
-| `ErrWouldBlock`  | aucun progrès possible maintenant                    | arrêter la tentative ; attendre disponibilité/complétion ; réessayer  |
-| `ErrMore`        | du progrès a eu lieu ; d'autres complétions suivront | traiter maintenant ; garder l'opération active ; continuer le sondage |
+| `ErrWouldBlock`  | poursuivre nécessite un signal de disponibilité | arrêter la tentative ; attendre disponibilité/complétion ; réessayer |
+| `ErrMore`        | l'opération reste active ; le compteur peut être nul | traiter les données retournées ; garder l'opération active ; continuer le sondage |
 | autre erreur     | échec                                                | gérer/journaliser/fermer/appliquer une attente selon le cas           |
 
 Traitez toujours le compteur retourné avant d'interpréter l'erreur retournée. Le compteur indique le progrès déjà effectué ; l'erreur sélectionne la prochaine action de contrôle.
@@ -229,6 +229,8 @@ La valeur par défaut est `nil`, ce qui signifie que le **comportement non bloqu
 ## Classification et répartition par sentinelle exacte
 
 Les fonctions auxiliaires de classification (`IsMore`, `IsWouldBlock`, `IsSemantic`, `IsNonFailure`, `IsFailure` et `Classify`) utilisent `errors.Is`, donc les sentinelles sémantiques enveloppées sont classifiées correctement aux frontières d'API et dans les diagnostics. Préférez ces fonctions auxiliaires aux appels directs à `errors.Is` pour classifier les résultats de contrôle sémantique de `iox`.
+
+`IsProgress` vaut true uniquement lorsque `Classify` sélectionne `OutcomeOK` ou `OutcomeMore`. Si une erreur correspond aux deux sentinelles sémantiques, `ErrWouldBlock` est prioritaire et `IsProgress` vaut false. `IsMore` et `IsWouldBlock` vérifient la correspondance avec chaque sentinelle ; les deux peuvent donc être true pour la même erreur. Ces prédicats ne mesurent pas le progrès en octets ; comptabilisez toujours les compteurs retournés séparément.
 
 Les chemins rapides internes de copy et tee répartissent les décisions de politique par identité exacte de sentinelle. Les producteurs sous votre contrôle devraient retourner `ErrMore` et `ErrWouldBlock` sans les envelopper sur ces chemins. Une erreur sémantique enveloppée est quand même retournée et classifiable, mais elle ne déclenche pas le réessai de politique fondé sur la sentinelle exacte.
 
