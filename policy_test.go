@@ -69,25 +69,6 @@ func (s *scriptedWT) WriteTo(dst iox.Writer) (int64, error) {
 	return 0, st.err
 }
 
-// scriptedRF implements iox.Writer with ReaderFrom fast path producing a scripted
-// sequence of (n, err) results. It ignores the src and returns scripted results.
-type scriptedRF struct {
-	seq []struct {
-		n   int64
-		err error
-	}
-	i int
-}
-
-func (scriptedRF) Write(p []byte) (int, error) { return len(p), nil }
-func (s *scriptedRF) ReadFrom(src iox.Reader) (int64, error) {
-	if s.i >= len(s.seq) {
-		return 0, io.EOF
-	}
-	st := s.seq[s.i]
-	s.i++
-	return st.n, st.err
-}
 func TestCopyPolicy_WriterTo_WouldBlock_RetryCompletes(t *testing.T) {
 	var src scriptedWT
 	src.seq = append(src.seq,
@@ -178,22 +159,21 @@ func TestCopyPolicy_WrappedErrMoreIsReturnedNotRetried(t *testing.T) {
 	}
 }
 func TestCopyPolicy_ReaderFrom_WouldBlock_RetryCompletes(t *testing.T) {
-	var dst scriptedRF
-	dst.seq = append(dst.seq,
-		struct {
-			n   int64
-			err error
-		}{n: 1, err: iox.ErrWouldBlock},
-		struct {
-			n   int64
-			err error
-		}{n: 4, err: nil},
-	)
-	src := bytes.NewBufferString("xxxxx")
+	src := &scriptedReader{steps: []struct {
+		b   []byte
+		err error
+	}{
+		{b: []byte("a"), err: iox.ErrWouldBlock},
+		{b: []byte("bcde"), err: io.EOF},
+	}}
+	var dst bytes.Buffer
 	p := &recPolicy{onWB: map[iox.Op]iox.PolicyAction{iox.OpCopyReaderFrom: iox.PolicyRetry}}
 	n, err := iox.CopyPolicy(&dst, src, p)
-	if err != nil || n != 5 {
-		t.Fatalf("n=%d err=%v", n, err)
+	if err != nil || n != 5 || dst.String() != "abcde" {
+		t.Fatalf("n=%d err=%v dst=%q", n, err, dst.String())
+	}
+	if len(p.yields) != 1 || p.yields[0] != iox.OpCopyReaderFrom {
+		t.Fatalf("policy yields = %v, want [%v]", p.yields, iox.OpCopyReaderFrom)
 	}
 }
 
@@ -207,7 +187,7 @@ func TestCopyPolicy_SlowPath_WriteShortZeroIsErrShortWrite(t *testing.T) {
 		t.Fatalf("want (0, ErrShortWrite) got (%d, %v)", n, err)
 	}
 }
-func TestCopyPolicy_SlowPath_ReadWouldBlock_RetryThenOK(t *testing.T) {
+func TestCopyBufferPolicy_SlowPath_ReadWouldBlock_RetryThenOK(t *testing.T) {
 	r := &scriptedReader{steps: []struct {
 		b   []byte
 		err error
@@ -217,9 +197,13 @@ func TestCopyPolicy_SlowPath_ReadWouldBlock_RetryThenOK(t *testing.T) {
 	}}
 	var dst sliceWriter
 	p := &recPolicy{onWB: map[iox.Op]iox.PolicyAction{iox.OpCopyRead: iox.PolicyRetry}}
-	n, err := iox.CopyPolicy(&dst, r, p)
+	// Split "hi" across two reads before the policy sees ErrWouldBlock.
+	n, err := iox.CopyBufferPolicy(&dst, r, make([]byte, 1), p)
 	if err != nil || n != 3 || string(dst.data) != "hi!" {
 		t.Fatalf("n=%d err=%v dst=%q", n, err, string(dst.data))
+	}
+	if len(p.yields) != 1 || p.yields[0] != iox.OpCopyRead {
+		t.Fatalf("policy yields = %v, want [%v]", p.yields, iox.OpCopyRead)
 	}
 }
 
