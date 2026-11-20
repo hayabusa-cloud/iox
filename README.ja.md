@@ -49,13 +49,13 @@ n, err := iox.Copy(&dst, src)
 fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: expect more "hello"
 _, _ = iox.CopyN(io.Discard, &dst, n)
 
-if iox.IsMore(err) {
+if iox.Classify(err) == iox.OutcomeMore {
 	n, err = iox.Copy(&dst, src)
 	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: would block "world"
 	_, _ = iox.CopyN(io.Discard, &dst, n)
 }
 
-if iox.IsWouldBlock(err) {
+if iox.Classify(err) == iox.OutcomeWouldBlock {
 	waitReadable()
 	n, err = iox.Copy(&dst, src)
 	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 3 <nil> "iox"
@@ -190,7 +190,7 @@ for {
 }
 ```
 
-待機やリターンの前に、返されたバイト列を処理します。このループは `ErrMore` をそのまま返し、`(0, nil)` の場合は EOF と解釈せず呼び出し側に制御を戻します。
+読み取ったバイトを先に処理します。エラーが `ErrWouldBlock` に一致すれば、`ErrMore` にも一致する場合を含め、待機してから再試行します。それ以外のエラーはそのまま返します。読み取りが `(0, nil)` を返すと呼び出し側に制御を戻します。この結果は入力の終端に達する前にも起こり得ます。
 
 ブロック `n` では、`n` 回の再試行に同じ基準時間 `min(n × base, max)` を使います。`Duration()` はこの基準時間を返します。各回の間隔は基準時間から最大 12.5% 変動し、`max` を超えることがあります。
 

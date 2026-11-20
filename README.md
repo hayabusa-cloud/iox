@@ -49,13 +49,13 @@ n, err := iox.Copy(&dst, src)
 fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: expect more "hello"
 _, _ = iox.CopyN(io.Discard, &dst, n)
 
-if iox.IsMore(err) {
+if iox.Classify(err) == iox.OutcomeMore {
 	n, err = iox.Copy(&dst, src)
 	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: would block "world"
 	_, _ = iox.CopyN(io.Discard, &dst, n)
 }
 
-if iox.IsWouldBlock(err) {
+if iox.Classify(err) == iox.OutcomeWouldBlock {
 	waitReadable()
 	n, err = iox.Copy(&dst, src)
 	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 3 <nil> "iox"
@@ -190,7 +190,7 @@ for {
 }
 ```
 
-Process any returned bytes before waiting or returning. This loop propagates `ErrMore` unchanged and returns control on `(0, nil)` without treating it as EOF.
+Process any bytes first. If the error matches `ErrWouldBlock`, the loop waits before retrying, even if it also matches `ErrMore`. The loop returns other errors unchanged. A `(0, nil)` read returns control to the caller and can occur before EOF.
 
 Block `n` contains `n` retry intervals. `Duration()` reports the nominal interval, `min(n × base, max)`. Jitter varies each interval by up to 12.5%, so it can exceed `max`.
 

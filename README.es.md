@@ -49,13 +49,13 @@ n, err := iox.Copy(&dst, src)
 fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: expect more "hello"
 _, _ = iox.CopyN(io.Discard, &dst, n)
 
-if iox.IsMore(err) {
+if iox.Classify(err) == iox.OutcomeMore {
 	n, err = iox.Copy(&dst, src)
 	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: would block "world"
 	_, _ = iox.CopyN(io.Discard, &dst, n)
 }
 
-if iox.IsWouldBlock(err) {
+if iox.Classify(err) == iox.OutcomeWouldBlock {
 	waitReadable()
 	n, err = iox.Copy(&dst, src)
 	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 3 <nil> "iox"
@@ -190,7 +190,7 @@ for {
 }
 ```
 
-Procesa los bytes devueltos antes de esperar o retornar. Este bucle propaga `ErrMore` sin cambios y devuelve el control con `(0, nil)` sin interpretarlo como EOF.
+Procesa primero los bytes leídos. Si el error coincide con `ErrWouldBlock`, el bucle espera antes de reintentar, incluso si también coincide con `ErrMore`. Devuelve cualquier otro error tal como lo recibió. Una lectura que devuelve `(0, nil)` cede el control a quien llama y puede ocurrir antes del fin de la entrada.
 
 El bloque `n` contiene `n` intervalos de reintento. `Duration()` devuelve el intervalo nominal, `min(n × base, max)`. Cada intervalo puede variar hasta un 12,5 % respecto al nominal y superar `max`.
 

@@ -49,13 +49,13 @@ n, err := iox.Copy(&dst, src)
 fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: expect more "hello"
 _, _ = iox.CopyN(io.Discard, &dst, n)
 
-if iox.IsMore(err) {
+if iox.Classify(err) == iox.OutcomeMore {
 	n, err = iox.Copy(&dst, src)
 	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: would block "world"
 	_, _ = iox.CopyN(io.Discard, &dst, n)
 }
 
-if iox.IsWouldBlock(err) {
+if iox.Classify(err) == iox.OutcomeWouldBlock {
 	waitReadable()
 	n, err = iox.Copy(&dst, src)
 	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 3 <nil> "iox"
@@ -190,7 +190,7 @@ for {
 }
 ```
 
-先处理返回的字节，再等待或返回。此循环原样传播 `ErrMore`，遇到 `(0, nil)` 时将控制权交还调用方，而不将其视为 EOF。
+先处理已读取的字节。只要错误匹配 `ErrWouldBlock`，循环就会等待后再重试，即使该错误也匹配 `ErrMore`。其他错误原样返回。读取返回 `(0, nil)` 时，循环将控制权交还调用方，此时输入可能尚未结束。
 
 第 `n` 个阶段包含 `n` 个重试间隔。`Duration()` 返回基准间隔 `min(n × base, max)`。每次重试的间隔在基准值上下浮动最多 12.5%，因此可能超过 `max`。
 

@@ -49,13 +49,13 @@ n, err := iox.Copy(&dst, src)
 fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: expect more "hello"
 _, _ = iox.CopyN(io.Discard, &dst, n)
 
-if iox.IsMore(err) {
+if iox.Classify(err) == iox.OutcomeMore {
 	n, err = iox.Copy(&dst, src)
 	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: would block "world"
 	_, _ = iox.CopyN(io.Discard, &dst, n)
 }
 
-if iox.IsWouldBlock(err) {
+if iox.Classify(err) == iox.OutcomeWouldBlock {
 	waitReadable()
 	n, err = iox.Copy(&dst, src)
 	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 3 <nil> "iox"
@@ -190,7 +190,7 @@ for {
 }
 ```
 
-Traitez les octets renvoyés avant d'attendre ou de retourner. Cette boucle propage `ErrMore` sans modification et rend le contrôle sur `(0, nil)` sans l'interpréter comme EOF.
+Traitez d’abord les octets lus. Si l’erreur correspond à `ErrWouldBlock`, la boucle attend avant de réessayer, même si elle correspond aussi à `ErrMore`. Elle renvoie toute autre erreur telle quelle. Une lecture qui renvoie `(0, nil)` rend le contrôle à l’appelant et peut survenir avant la fin de l’entrée.
 
 Le bloc `n` contient `n` intervalles entre tentatives. `Duration()` renvoie l’intervalle nominal, `min(n × base, max)`. Chaque intervalle peut s’en écarter de 12,5 % au plus et dépasser `max`.
 
