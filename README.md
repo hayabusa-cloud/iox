@@ -173,6 +173,8 @@ for {
 
 Call `Wait.Arm` with the driver’s enqueue function. The trigger can signal before `Arm` returns. The first accepted `Signal.Deliver` enqueues one `Ready`. A worker can claim it once with `TryResume` to run the continuation. If `Deliver` returns `false`, the source keeps its value. [Typed completion example](example_await_test.go)
 
+`WriteStep` records the count and error from each write. If the writer accepts only a prefix and returns `ErrWouldBlock`, a wake permits one attempt to write the suffix to the same writer. If the writer accepts the whole buffer, the step finishes with its error, including `ErrWouldBlock`. Keep the buffer valid and unmodified until completion or successful withdrawal.
+
 ## Backoff — Adaptive Waiting for External I/O
 
 When `ErrWouldBlock` signals that no progress is possible, the caller must wait before retrying. `iox.Backoff` provides an adaptive back-off strategy for this waiting.

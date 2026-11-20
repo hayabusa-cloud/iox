@@ -173,6 +173,8 @@ for {
 
 调用 `Wait.Arm` 时传入执行器的入队函数。事件源可以在 `Arm` 返回前发出信号。首次被接受的 `Signal.Deliver` 调用将一个 `Ready` 放入队列。工作线程可用 `TryResume` 领取这项工作并执行续体，只有一次领取会成功。如果 `Deliver` 返回 `false`，事件源仍然拥有该值。 [接收类型化结果的示例](example_await_test.go)
 
+`WriteStep` 记录每次写入的字节数和错误。如果写入端只接受了前缀并返回 `ErrWouldBlock`，收到通知后可以向同一写入端尝试写入一次剩余部分。如果写入端接受了整个缓冲区，操作就以此次返回的错误结束，包括 `ErrWouldBlock`。操作完成或成功撤回等待之前，请保持缓冲区有效且不修改其内容。
+
 ## Backoff — 外部 I/O 的自适应等待
 
 当 `ErrWouldBlock` 表示当前无法取得进展时，调用方必须等待后再重试。`iox.Backoff` 为此提供自适应退避策略。

@@ -175,6 +175,8 @@ for {
 
 Passez à `Wait.Arm` la fonction de mise en file de l’exécuteur. La source peut émettre un signal avant le retour de `Arm`. Le premier appel accepté à `Signal.Deliver` place un `Ready` dans la file. Un seul appel à `TryResume` peut le consommer et exécuter la continuation. Si `Deliver` renvoie `false`, la source conserve la valeur. [Exemple de réception d’une valeur typée](example_await_test.go)
 
+`WriteStep` enregistre le nombre d’octets et l’erreur de chaque écriture. Si la destination accepte seulement un préfixe et renvoie `ErrWouldBlock`, un signal autorise une tentative d’écriture des octets restants vers la même destination. Si elle accepte tout le tampon, l’étape se termine avec l’erreur renvoyée, y compris `ErrWouldBlock`. Gardez le tampon valide et intact jusqu’à la fin de l’opération ou au retrait effectif de l’attente.
+
 ## Backoff — attente adaptative pour E/S externe
 
 Quand `ErrWouldBlock` signale qu'aucun progrès n'est possible, l'appelant doit attendre avant de réessayer. `iox.Backoff` fournit une stratégie d'attente adaptative pour ce cas.

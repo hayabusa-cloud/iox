@@ -174,6 +174,8 @@ for {
 
 Llama a `Wait.Arm` con la función que usa el ejecutor para encolar trabajo. La fuente puede emitir una señal antes de que `Arm` regrese. La primera llamada aceptada a `Signal.Deliver` encola un `Ready`. Un trabajador puede reclamarlo una sola vez con `TryResume` para ejecutar la continuación. Si `Deliver` devuelve `false`, la fuente conserva el valor. [Ejemplo de finalización tipada](example_await_test.go)
 
+`WriteStep` registra el número de bytes y el error de cada escritura. Si el escritor acepta solo un prefijo y devuelve `ErrWouldBlock`, una señal permite intentar escribir los bytes restantes en el mismo destino. Si acepta todo el búfer, el paso termina con el error devuelto, incluido `ErrWouldBlock`. Mantenga el búfer válido y sin modificar hasta que termine la operación o se retire la espera con éxito.
+
 ## Backoff — espera adaptativa para E/S externa
 
 Cuando `ErrWouldBlock` señala que no es posible progresar, el llamador debe esperar antes de reintentar. `iox.Backoff` proporciona una estrategia de retroceso adaptativo para esta espera.

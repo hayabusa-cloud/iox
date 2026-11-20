@@ -41,6 +41,10 @@
 // A driver registers the wait with [Wait.Arm]. Once a signal is accepted,
 // a worker can claim the ready work with [Ready.TryResume] to run its continuation.
 //
+// [WriteStep] retains the unwritten suffix after a partial [ErrWouldBlock].
+// A wake permits one more write to the same destination. A full count ends
+// the operation with the writer's error and the total accepted byte count.
+//
 // These semantics propagate through Copy/CopyN and Tee helpers. CopyN,
 // CopyNBuffer, and their policy variants are bounded "copy exactly n bytes"
 // operations: once written == n, they return nil at that abstraction boundary.
