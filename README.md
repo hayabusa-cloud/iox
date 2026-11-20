@@ -3,7 +3,6 @@
 Non-blocking semantics for Go `io` package: first-class signals for would-block and multi-shot.
 
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/iox.svg)](https://pkg.go.dev/code.hybscloud.com/iox)
-[![Go Report Card](https://goreportcard.com/badge/github.com/hayabusa-cloud/iox)](https://goreportcard.com/report/github.com/hayabusa-cloud/iox)
 [![codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -65,7 +64,8 @@ This rollback guarantee applies to the generic read/write loop owned by `iox.Cop
 
 ## Quick start
 
-Install with `go get`:
+This module requires Go 1.27 or later.
+
 ```shell
 go get code.hybscloud.com/iox
 ```
@@ -223,7 +223,7 @@ Process any returned bytes before waiting or returning. This loop propagates `Er
 
 Some helpers accept an optional `SemanticPolicy` to decide what to do when they encounter `ErrWouldBlock` or `ErrMore` (e.g., return immediately vs yield and retry).
 
-The default is `nil`, which means **non-blocking behavior is preserved**: the helper returns `ErrWouldBlock` / `ErrMore` to the caller and does not wait or retry on its own.
+The default `nil` policy leaves waiting and retrying to the caller. For `n > 0`, `CopyNPolicy` and `CopyNBufferPolicy` return `(n, nil)` once the destination accepts all `n` bytes. They skip policy callbacks for a signal reported with the final byte.
 
 ## Classification and exact sentinel dispatch
 
@@ -231,7 +231,7 @@ Classification helpers (`IsMore`, `IsWouldBlock`, `IsSemantic`, `IsNonFailure`, 
 
 `IsProgress` is true only when `Classify` selects `OutcomeOK` or `OutcomeMore`. If an error matches both semantic sentinels, `ErrWouldBlock` takes precedence and `IsProgress` is false. `IsMore` and `IsWouldBlock` report sentinel membership, so both may be true for the same error. These predicates do not measure byte progress; always account for returned counts separately.
 
-Internal copy and tee hot paths dispatch policy decisions by exact sentinel identity. Producers under your control should return `ErrMore` and `ErrWouldBlock` unwrapped on those paths. A wrapped semantic error is still returned and classifiable, but it does not trigger exact-sentinel policy retry.
+Copy and tee helpers consult the policy only for the exact `ErrMore` and `ErrWouldBlock` sentinels. Return these sentinels unwrapped when you want the policy to handle them.
 
 ## Fast paths and semantic preservation
 

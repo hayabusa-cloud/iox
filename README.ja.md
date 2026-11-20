@@ -3,7 +3,6 @@
 Go `io` パッケージ向けのノンブロッキングセマンティクス：would-block と multi-shot を第一級のシグナルとして扱います。
 
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/iox.svg)](https://pkg.go.dev/code.hybscloud.com/iox)
-[![Go Report Card](https://goreportcard.com/badge/github.com/hayabusa-cloud/iox)](https://goreportcard.com/report/github.com/hayabusa-cloud/iox)
 [![codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -65,7 +64,7 @@ Go の `io.Reader` 約束では、`Read` が `(0, nil)` を返して「進捗な
 
 ## クイックスタート
 
-`go get` でインストール:
+このモジュールには Go 1.27 以降が必要です。
 
 ```shell
 go get code.hybscloud.com/iox
@@ -226,7 +225,7 @@ for {
 
 一部のヘルパーはオプションで `SemanticPolicy` を受け取り、`ErrWouldBlock` や `ErrMore` に遭遇したときにどう振る舞うか（例: すぐ返すか、いったん制御を譲って再試行するか）を決めます。
 
-デフォルトは `nil` です。つまり**非ブロッキングの挙動は保持されます**。ヘルパーは `ErrWouldBlock` / `ErrMore` を呼び出し側へ返し、自身では待機や再試行を行いません。
+デフォルトの `nil` ポリシーでは、呼び出し側が待機と再試行を担います。`n > 0` のとき、`CopyNPolicy` と `CopyNBufferPolicy` は書き込み先が合計 `n` バイトを受け取った時点で `(n, nil)` を返します。最後のバイトとともに返されたシグナルについては、ポリシーのコールバックを呼びません。
 
 ## 分類と厳密なセンチネルディスパッチ
 
@@ -234,7 +233,7 @@ for {
 
 `IsProgress` は `Classify` が `OutcomeOK` または `OutcomeMore` を選ぶ場合にのみ true を返します。同じ error が両方のセマンティックセンチネルに一致する場合は `ErrWouldBlock` が優先され、`IsProgress` は false になります。`IsMore` と `IsWouldBlock` はそれぞれのセンチネルへの一致を調べるため、両方が true になることがあります。これらの述語はバイト数の進捗を測りません。返された count は常に別途処理してください。
 
-内部の copy / tee 高速パスはポリシー判断をセンチネルの厳密な同一性でディスパッチします。制御下にあるプロデューサーは、そのパスでは `ErrMore` と `ErrWouldBlock` をラップせずに返してください。ラップされたセマンティックエラーはそのまま返され、分類も可能ですが、厳密なセンチネルに基づくポリシー再試行は起動しません。
+コピーや tee のヘルパーがポリシーに判断を委ねるのは、`ErrMore` または `ErrWouldBlock` を直接受け取った場合だけです。ポリシーで処理したいときは、これらのセンチネルをラップせずに返してください。
 
 ## 高速パスとセマンティクス保持
 

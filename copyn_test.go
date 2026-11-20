@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"testing"
 
 	"code.hybscloud.com/iox"
@@ -150,6 +151,90 @@ func TestCopyNReaderFromRetryRestoresLimit(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestCopyNPolicyStopsAtLimit(t *testing.T) {
+	for _, op := range []iox.Op{iox.OpCopyRead, iox.OpCopyWrite, iox.OpCopyReaderFrom} {
+		for _, signal := range []error{iox.ErrWouldBlock, iox.ErrMore} {
+			for _, limit := range []int64{1, 3} {
+				for _, buffered := range []bool{false, true} {
+					name := fmt.Sprintf("%s/%s/limit=%d/buffered=%t", op, signal, limit, buffered)
+					t.Run(name, func(t *testing.T) {
+						checkCopyNPolicyLimit(t, op, signal, limit, buffered)
+					})
+				}
+			}
+		}
+	}
+}
+
+func checkCopyNPolicyLimit(t *testing.T, op iox.Op, signal error, limit int64, buffered bool) {
+	t.Helper()
+	const data = "abcTAIL"
+	src := bytes.NewBufferString(data)
+	var dst countingReaderFrom
+
+	// Each accepted byte carries a signal, including the one that completes the request.
+	var r io.Reader = &funcReader{read: func(p []byte) (int, error) {
+		n, err := src.Read(p[:min(1, len(p))])
+		if n > 0 {
+			err = signal
+		}
+		return n, err
+	}}
+	var w io.Writer = struct{ io.Writer }{&dst}
+	switch op {
+	case iox.OpCopyWrite:
+		r = src
+		w = iox.TeeWriter(errWriter{n: 1, err: signal}, &dst)
+	case iox.OpCopyReaderFrom:
+		w = &dst
+	}
+
+	type call struct {
+		op      iox.Op
+		written int
+		yield   bool
+	}
+	var got, want []call
+	retry := func(op iox.Op) iox.PolicyAction {
+		got = append(got, call{op, dst.Len(), false})
+		return iox.PolicyRetry
+	}
+	policy := iox.PolicyFunc{
+		WouldBlockFunc: retry,
+		MoreFunc:       retry,
+		YieldFunc:      func(op iox.Op) { got = append(got, call{op, dst.Len(), true}) },
+	}
+	var n int64
+	var err error
+	if buffered {
+		n, err = iox.CopyNBufferPolicy(w, r, limit, make([]byte, 3), policy)
+	} else {
+		n, err = iox.CopyNPolicy(w, r, limit, policy)
+	}
+	if n != limit || err != nil || dst.String() != data[:limit] || src.String() != data[limit:] {
+		t.Fatalf("copy = (%d, %v), destination %q, remaining source %q", n, err, dst.String(), src.String())
+	}
+	for written := 1; written < int(limit); written++ {
+		want = append(want, call{op, written, false}, call{op, written, true})
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("policy calls = %+v, want %+v", got, want)
+	}
+	if op == iox.OpCopyReaderFrom && dst.calls != int(limit) {
+		t.Errorf("ReadFrom calls = %d, want %d", dst.calls, limit)
+	}
+}
+
+type countingReaderFrom struct {
+	bytes.Buffer
+	calls int
+}
+
+func (w *countingReaderFrom) ReadFrom(r io.Reader) (int64, error) {
+	w.calls++
+	return w.Buffer.ReadFrom(r)
 }
 
 // A delegated bounded copy can introduce another private limiter.

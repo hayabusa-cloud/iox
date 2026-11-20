@@ -67,7 +67,7 @@ func CopyPolicy(dst Writer, src Reader, policy SemanticPolicy) (written int64, e
 	if policy == nil {
 		return copyBuffer(dst, src, nil)
 	}
-	return copyBufferPolicy(dst, src, nil, policy)
+	return copyBufferPolicy(dst, src, nil, policy, -1)
 }
 
 // CopyBuffer is like Copy but stages through buf if needed.
@@ -101,11 +101,12 @@ func CopyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 	if policy == nil {
 		return copyBuffer(dst, src, buf)
 	}
-	return copyBufferPolicy(dst, src, buf, policy)
+	return copyBufferPolicy(dst, src, buf, policy, -1)
 }
 
 // CopyN copies n bytes (or until an error) from src to dst.
-// On return, written == n if and only if err == nil.
+// For n > 0, it returns nil exactly when the destination accepts n bytes.
+// For n <= 0, it returns (0, nil) without reading or writing.
 //
 // iox semantics extension:
 //   - ErrWouldBlock / ErrMore may be returned when progress stops early;
@@ -132,23 +133,13 @@ func CopyN(dst Writer, src Reader, n int64) (written int64, err error) {
 		written, err = copyBuffer(dst, &lr, nil)
 	}
 
-	if written == n {
-		return n, nil
-	}
-
-	if err == nil {
-		return written, io.ErrUnexpectedEOF
-	}
-	if err == io.EOF {
-		return written, io.ErrUnexpectedEOF
-	}
-	return written, err
+	return finishCopyN(n, written, err)
 }
 
-// CopyNPolicy is like CopyN but consults policy on semantic errors.
-//
-//   - nil policy: identical to CopyN
-//   - non-nil: uses the policy-aware engine; PolicyRetry yields and retries.
+// CopyNPolicy is like CopyN but consults policy on semantic errors while
+// bytes remain to be written. Once the destination reports n bytes written
+// in total, CopyNPolicy returns (n, nil) before calling policy again.
+// A nil policy is equivalent to CopyN.
 func CopyNPolicy(dst Writer, src Reader, n int64, policy SemanticPolicy) (written int64, err error) {
 	if n <= 0 {
 		return 0, nil
@@ -157,19 +148,13 @@ func CopyNPolicy(dst Writer, src Reader, n int64, policy SemanticPolicy) (writte
 		return CopyN(dst, src, n)
 	}
 	lr := limitedReader{R: src, N: n}
-	written, err = copyBufferPolicy(dst, &lr, nil, policy)
-	if written == n {
-		return n, nil
-	}
-	if err == nil || err == io.EOF {
-		return written, io.ErrUnexpectedEOF
-	}
-	return written, err
+	written, err = copyBufferPolicy(dst, &lr, nil, policy, n)
+	return finishCopyN(n, written, err)
 }
 
 // CopyNBuffer is like CopyN but stages through buf if needed.
 // If buf is nil, an internal fixed-size buffer is used.
-// If buf has zero length, CopyNBuffer panics.
+// For n > 0, a non-nil buffer of length zero causes a panic.
 func CopyNBuffer(dst Writer, src Reader, n int64, buf []byte) (written int64, err error) {
 	if n <= 0 {
 		return 0, nil
@@ -183,18 +168,11 @@ func CopyNBuffer(dst Writer, src Reader, n int64, buf []byte) (written int64, er
 	} else {
 		written, err = copyBuffer(dst, &lr, buf)
 	}
-	if written == n {
-		return n, nil
-	}
-	if err == nil || err == io.EOF {
-		return written, io.ErrUnexpectedEOF
-	}
-	return written, err
+	return finishCopyN(n, written, err)
 }
 
-// CopyNBufferPolicy is like CopyNBuffer but consults policy on semantic errors.
-//
-//   - nil policy: identical to CopyNBuffer
+// CopyNBufferPolicy is like CopyNPolicy with the buffer rules of CopyNBuffer.
+// A nil policy is equivalent to CopyNBuffer.
 func CopyNBufferPolicy(dst Writer, src Reader, n int64, buf []byte, policy SemanticPolicy) (written int64, err error) {
 	if n <= 0 {
 		return 0, nil
@@ -206,9 +184,13 @@ func CopyNBufferPolicy(dst Writer, src Reader, n int64, buf []byte, policy Seman
 		return CopyNBuffer(dst, src, n, buf)
 	}
 	lr := limitedReader{R: src, N: n}
-	written, err = copyBufferPolicy(dst, &lr, buf, policy)
-	if written == n {
-		return n, nil
+	written, err = copyBufferPolicy(dst, &lr, buf, policy, n)
+	return finishCopyN(n, written, err)
+}
+
+func finishCopyN(target, written int64, err error) (int64, error) {
+	if written == target {
+		return written, nil
 	}
 	if err == nil || err == io.EOF {
 		return written, io.ErrUnexpectedEOF
@@ -319,9 +301,9 @@ func copyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 	}
 }
 
-// copyBufferPolicy is a policy-aware copy implementation.
-// policy is guaranteed non-nil by callers.
-func copyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy) (written int64, err error) {
+// copyBufferPolicy takes a non-nil policy. For a bounded source, target is
+// the requested write count. An unbounded copy uses -1.
+func copyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy, target int64) (written int64, err error) {
 	// Fast paths with policy awareness: loop and consult policy on semantic errors.
 	if wt, ok := src.(WriterTo); ok {
 		var total int64
@@ -360,10 +342,7 @@ func copyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 			if n > 0 {
 				total += n
 			}
-			if e == nil {
-				return total, nil
-			}
-			if e == io.EOF {
+			if e == nil || e == io.EOF || total == target {
 				return total, nil
 			}
 			if e == ErrWouldBlock {
@@ -401,6 +380,9 @@ func copyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 					off += nw
 				}
 				if ew != nil {
+					if written == target {
+						return written, nil
+					}
 					if ew == ErrWouldBlock {
 						if policy.OnWouldBlock(OpCopyWrite) == PolicyRetry {
 							policy.Yield(OpCopyWrite)
@@ -442,7 +424,7 @@ func copyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 		}
 
 		if er != nil {
-			if er == io.EOF {
+			if er == io.EOF || written == target {
 				return written, nil
 			}
 			if er == ErrWouldBlock {

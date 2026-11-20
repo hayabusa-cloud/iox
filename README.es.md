@@ -3,7 +3,6 @@
 Semántica no bloqueante para el paquete Go `io`: señales de primera clase para would-block y multi-shot.
 
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/iox.svg)](https://pkg.go.dev/code.hybscloud.com/iox)
-[![Go Report Card](https://goreportcard.com/badge/github.com/hayabusa-cloud/iox)](https://goreportcard.com/report/github.com/hayabusa-cloud/iox)
 [![codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -66,7 +65,7 @@ Esta garantía de retroceso se aplica al bucle genérico de lectura/escritura qu
 
 ## Inicio rápido
 
-Instala con `go get`:
+Este módulo requiere Go 1.27 o posterior.
 
 ```shell
 go get code.hybscloud.com/iox
@@ -227,7 +226,7 @@ Procesa los bytes devueltos antes de esperar o retornar. Este bucle propaga `Err
 
 Algunas funciones auxiliares aceptan opcionalmente un `SemanticPolicy` para decidir qué hacer cuando encuentran `ErrWouldBlock` o `ErrMore` (por ejemplo, devolver inmediatamente o ceder y reintentar).
 
-El valor por defecto es `nil`, lo que significa que se **preserva el comportamiento no bloqueante**: la función auxiliar devuelve `ErrWouldBlock` / `ErrMore` al llamador y no espera ni reintenta por su cuenta.
+Con la política predeterminada (`nil`), quien llama se encarga de esperar y reintentar. Si `n > 0`, `CopyNPolicy` y `CopyNBufferPolicy` devuelven `(n, nil)` en cuanto el destino ha aceptado los `n` bytes. Una señal recibida con el último byte no activa las funciones de la política.
 
 ## Clasificación y despacho por centinela exacto
 
@@ -235,7 +234,7 @@ Las funciones auxiliares de clasificación (`IsMore`, `IsWouldBlock`, `IsSemanti
 
 `IsProgress` es true solo cuando `Classify` selecciona `OutcomeOK` u `OutcomeMore`. Si un error coincide con ambos centinelas semánticos, `ErrWouldBlock` tiene prioridad e `IsProgress` es false. `IsMore` e `IsWouldBlock` comprueban la coincidencia con cada centinela, por lo que ambos pueden ser true para el mismo error. Estos predicados no miden el progreso en bytes; contabiliza siempre los conteos devueltos por separado.
 
-Las rutas rápidas internas de copy y tee despachan decisiones de política por identidad exacta del centinela. Los productores bajo tu control deberían devolver `ErrMore` y `ErrWouldBlock` sin envolver en esas rutas. Un error semántico envuelto se devuelve y sigue siendo clasificable, pero no activa el reintento de política basado en centinelas exactos.
+Las funciones de copia y tee solo consultan la política cuando reciben directamente los centinelas `ErrMore` o `ErrWouldBlock`. Devuélvelos sin envolver para que la política pueda procesarlos.
 
 ## Rutas rápidas y preservación de semántica
 

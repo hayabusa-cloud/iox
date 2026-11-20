@@ -3,7 +3,6 @@
 为 Go `io` 包提供非阻塞语义：把“会阻塞（would-block）”与“多次完成（multi-shot）”作为一等控制信号。
 
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/iox.svg)](https://pkg.go.dev/code.hybscloud.com/iox)
-[![Go Report Card](https://goreportcard.com/badge/github.com/hayabusa-cloud/iox)](https://goreportcard.com/report/github.com/hayabusa-cloud/iox)
 [![codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -65,7 +64,7 @@ Go 的 `io.Reader` 契约允许 `Read` 返回 `(0, nil)` 来表示“没有进�
 
 ## 快速开始
 
-使用 `go get` 安装：
+此模块要求使用 Go 1.27 或更高版本。
 
 ```shell
 go get code.hybscloud.com/iox
@@ -226,7 +225,7 @@ for {
 
 一些辅助函数支持可选的 `SemanticPolicy`，用于在遇到 `ErrWouldBlock` 或 `ErrMore` 时决定采取何种行为（例如：立即返回，或让出/yield 后再重试）。
 
-默认值为 `nil`，表示**保持非阻塞行为**：辅助函数会将 `ErrWouldBlock` / `ErrMore` 直接返回给调用方，不会自行等待或重试。
+使用默认的 `nil` 策略时，由调用方负责等待和重试。当 `n > 0` 时，目标端一旦累计接收了 `n` 个字节，`CopyNPolicy` 和 `CopyNBufferPolicy` 就返回 `(n, nil)`。随最后一个字节返回的信号不会触发策略回调。
 
 ## 分类与精确哨兵分发
 
@@ -234,7 +233,7 @@ for {
 
 只有当 `Classify` 选择 `OutcomeOK` 或 `OutcomeMore` 时，`IsProgress` 才返回 true。如果同一错误匹配两个语义哨兵，`ErrWouldBlock` 优先，`IsProgress` 返回 false。`IsMore` 和 `IsWouldBlock` 检查是否匹配各自的哨兵，因此可以同时为 true。这些谓词不衡量字节进展；始终单独处理返回计数。
 
-内部 copy 和 tee 热路径通过精确的哨兵身份分发策略决策。你控制的 producer 应在这些路径上直接返回未包装的 `ErrMore` 和 `ErrWouldBlock`。包装过的语义错误仍会被返回，也仍可分类，但不会触发基于精确哨兵的策略重试。
+复制和 tee 辅助函数只有在直接收到 `ErrMore` 或 `ErrWouldBlock` 时才会调用策略。要让策略处理这些哨兵错误，请直接返回它们，不要包装。
 
 ## 快速路径与语义保持
 

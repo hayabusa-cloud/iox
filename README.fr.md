@@ -3,7 +3,6 @@
 Sémantique non bloquante pour le package Go `io` : signaux de premier ordre pour would-block et multi-shot.
 
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/iox.svg)](https://pkg.go.dev/code.hybscloud.com/iox)
-[![Go Report Card](https://goreportcard.com/badge/github.com/hayabusa-cloud/iox)](https://goreportcard.com/report/github.com/hayabusa-cloud/iox)
 [![codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -67,7 +66,7 @@ Cette garantie de retour arrière s'applique à la boucle générique lecture/é
 
 ## Démarrage rapide
 
-Installer avec `go get` :
+Ce module nécessite Go 1.27 ou une version ultérieure.
 
 ```shell
 go get code.hybscloud.com/iox
@@ -228,7 +227,7 @@ Traitez les octets renvoyés avant d'attendre ou de retourner. Cette boucle prop
 
 Certaines fonctions auxiliaires acceptent optionnellement une `SemanticPolicy` pour décider quoi faire lorsqu'elles rencontrent `ErrWouldBlock` ou `ErrMore` (p. ex., retourner immédiatement ou céder puis réessayer).
 
-La valeur par défaut est `nil`, ce qui signifie que le **comportement non bloquant est préservé** : la fonction auxiliaire retourne `ErrWouldBlock` / `ErrMore` à l’appelant et n’attend ni ne réessaie de lui-même.
+Avec la politique par défaut (`nil`), l’appelant gère l’attente et les nouvelles tentatives. Si `n > 0`, `CopyNPolicy` et `CopyNBufferPolicy` renvoient `(n, nil)` dès que la destination a accepté les `n` octets. Un signal reçu avec le dernier octet ne déclenche aucun appel à la politique.
 
 ## Classification et répartition par sentinelle exacte
 
@@ -236,7 +235,7 @@ Les fonctions auxiliaires de classification (`IsMore`, `IsWouldBlock`, `IsSemant
 
 `IsProgress` vaut true uniquement lorsque `Classify` sélectionne `OutcomeOK` ou `OutcomeMore`. Si une erreur correspond aux deux sentinelles sémantiques, `ErrWouldBlock` est prioritaire et `IsProgress` vaut false. `IsMore` et `IsWouldBlock` vérifient la correspondance avec chaque sentinelle ; les deux peuvent donc être true pour la même erreur. Ces prédicats ne mesurent pas le progrès en octets ; comptabilisez toujours les compteurs retournés séparément.
 
-Les chemins rapides internes de copy et tee répartissent les décisions de politique par identité exacte de sentinelle. Les producteurs sous votre contrôle devraient retourner `ErrMore` et `ErrWouldBlock` sans les envelopper sur ces chemins. Une erreur sémantique enveloppée est quand même retournée et classifiable, mais elle ne déclenche pas le réessai de politique fondé sur la sentinelle exacte.
+Les fonctions de copie et de tee consultent la politique uniquement si elles reçoivent directement l’une des sentinelles `ErrMore` ou `ErrWouldBlock`. Renvoyez ces sentinelles sans les envelopper pour que la politique puisse les traiter.
 
 ## Chemins rapides et préservation de la sémantique
 
