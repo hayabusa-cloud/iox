@@ -8,22 +8,18 @@ import (
 	"errors"
 )
 
-// Outcome classifies an operation result based on iox's extended semantics.
-// Its numeric encoding is defensive, not an ordering; use switches, Classify,
-// and predicate helpers instead of numeric comparison.
-//
-// OutcomeOK:            successful control result at this boundary.
-// OutcomeWouldBlock:    no further progress without readiness; retry later.
-// OutcomeMore:          operation remains active; successor observations expected.
-// OutcomeFailure:       any other error (including EOF when it's not absorbed by helpers).
-//
-// Returned counts report quantitative progress separately from Outcome.
+// Outcome classifies the error returned by an I/O operation. Treat the
+// constants as unordered labels in a switch. The byte count reports progress.
 type Outcome uint8
 
 const (
+	// OutcomeFailure denotes an error other than a semantic signal.
 	OutcomeFailure Outcome = iota
+	// OutcomeOK denotes a nil error.
 	OutcomeOK
+	// OutcomeWouldBlock means further progress requires readiness.
 	OutcomeWouldBlock
+	// OutcomeMore means the operation remains active.
 	OutcomeMore
 )
 
@@ -63,20 +59,14 @@ func IsNonFailure(err error) bool { return err == nil || IsSemantic(err) }
 // semantic control signal.
 func IsFailure(err error) bool { return err != nil && !IsSemantic(err) }
 
-// IsProgress reports whether Classify selects OutcomeOK or OutcomeMore.
-// ErrWouldBlock takes precedence when err matches both semantic sentinels.
-// This classifies control only; callers must account for returned counts
-// separately, including partial progress paired with ErrWouldBlock.
+// IsProgress reports whether [Classify] selects [OutcomeOK] or [OutcomeMore].
+// Use the returned byte count to determine how much data moved.
 func IsProgress(err error) bool { return err == nil || Classify(err) == OutcomeMore }
 
-// Classify maps err to an Outcome. Use when a compact switch is preferred.
-//
-// Classify accepts wrapped semantic sentinels through errors.Is. Internal
-// hot-path engines may still require exact sentinel identity for policy dispatch.
-// ErrWouldBlock takes precedence when err matches both semantic sentinels.
-//
-// Note: This does not attempt to reinterpret standard library sentinels like
-// io.EOF; classification depends solely on the error value the caller passes.
+// Classify returns [OutcomeOK] for nil, [OutcomeWouldBlock] for errors
+// matching [ErrWouldBlock], [OutcomeMore] for errors matching [ErrMore], and
+// [OutcomeFailure] otherwise. [ErrWouldBlock] takes precedence if both match.
+// Classify treats [EOF] as [OutcomeFailure]. Copy helpers handle EOF separately.
 func Classify(err error) Outcome {
 	if err == nil {
 		return OutcomeOK

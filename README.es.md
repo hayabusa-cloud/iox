@@ -11,58 +11,20 @@ Idioma: [English](./README.md) | [简体中文](./README.zh-CN.md) | **Español*
 
 ## Descripción general
 
-`iox` está diseñado para pilas de E/S no bloqueantes donde “seguir avanzando requiere disponibilidad” y “la operación sigue activa” son **flujo de control normal**, no fallos.
+`iox` está pensado para pilas de E/S no bloqueante en las que «espera a que el recurso esté listo antes de reintentar» (`ErrWouldBlock`) y «sigue observando la misma operación» (`ErrMore`) forman parte del flujo de control normal.
 
-Introduce dos errores semánticos con contratos explícitos:
+Sus funciones de copia y duplicación de datos (tee) usan las interfaces estándar `io.Reader` e `io.Writer` de Go. En el par habitual `(n, err)`, `n` indica cuántos bytes se han transferido y `err` guía el siguiente paso. Con cualquiera de las dos señales, `n` puede ser cero o positivo, así que contabiliza primero los bytes indicados por `n`.
 
-- `ErrWouldBlock` — **no es posible seguir avanzando** sin esperar señales de disponibilidad o finalización. Devuelve de inmediato; reintenta tras el siguiente sondeo.
-- `ErrMore` — **la operación sigue activa** y se esperan observaciones posteriores. El conteo puede ser cero; procesa los datos devueltos y continúa sondeando.
+## Resultados de E/S
 
-`iox` mantiene intactos los modelos mentales estándar de `io`:
+| Error | Resultado de `Classify` | Acción |
+|---|---|---|
+| `nil` | `OutcomeOK` | Continúa o termina la transferencia |
+| `ErrWouldBlock` | `OutcomeWouldBlock` | Espera a que el recurso esté listo antes de reintentar |
+| `ErrMore` | `OutcomeMore` | Mantén la operación activa y espera la siguiente finalización |
+| Otro error | `OutcomeFailure` | Gestiona el error teniendo en cuenta los bytes ya transferidos |
 
-- los recuentos devueltos siempre significan “bytes transferidos / progreso realizado”
-- los errores devueltos guían el flujo de control (`nil`, señal semántica de no fallo, o fallo real)
-- las funciones auxiliares son compatibles con `io.Reader`, `io.Writer`, y se optimizan con `io.WriterTo` / `io.ReaderFrom`
-
-## Contrato de semántica
-
-Para operaciones que adopten la semántica de `iox`:
-
-| Error devuelto  | Significado                                            | Qué debe hacer el llamador a continuación                       |
-|-----------------|--------------------------------------------------------|-----------------------------------------------------------------|
-| `nil`           | completado con éxito para esta llamada / transferencia | continúa tu máquina de estados                                  |
-| `ErrWouldBlock` | seguir avanzando requiere disponibilidad | deja de intentar; espera disponibilidad/finalización; reintenta |
-| `ErrMore`       | la operación sigue activa; el conteo puede ser cero | procesa los datos devueltos; mantén la operación activa; continúa el sondeo |
-| otro error      | fallo                                                  | maneja/registra/cierra/aplica retroceso según corresponda       |
-
-Procesa siempre el conteo devuelto antes de interpretar el error devuelto. El conteo informa el progreso ya realizado; el error selecciona la siguiente acción de control.
-
-Notas:
-- `iox.Copy` puede devolver `(written > 0, ErrWouldBlock)` o `(written > 0, ErrMore)` para reportar progreso parcial antes de quedar bloqueado o antes de entregar una continuación multi-shot.
-- Las lecturas `(0, nil)` se tratan como “detener la copia ahora” y devuelven `(written, nil)` para evitar una espera activa oculta dentro de las funciones auxiliares.
-- `CopyN`, `CopyNBuffer` y sus variantes con política son operaciones acotadas de "copiar exactamente n bytes". Cuando `written == n`, devuelven `nil`; no son APIs de ciclo de vida para suscripciones ni rutas multi-shot.
-- Los valores numéricos de `Outcome` son codificaciones defensivas, no un orden semántico. Usa `switch`, `Classify` y predicados en vez de `<`, `>`, `min` o `max`.
-
-### Nota: `iox.Copy` y lecturas `(0, nil)`
-
-El contrato de Go `io.Reader` permite que `Read` devuelva `(0, nil)` para indicar “sin progreso”, no fin de flujo. Los lectores bien comportados deberían evitar `(0, nil)` salvo cuando `len(p) == 0`.
-
-`iox.Copy` trata una lectura `(0, nil)` como “detener la copia ahora” y devuelve `(written, nil)`. Esto evita ocultar una espera activa dentro de una función auxiliar en código no bloqueante o de bucle de eventos. Si necesitas detección estricta de progreso hacia delante ante múltiples `(0, nil)`, implementa esa política en el punto de llamada.
-
-### Nota: `iox.Copy` y recuperación de escritura parcial
-
-Al copiar a un destino no bloqueante, `dst.Write` puede devolver un error semántico (`ErrWouldBlock` o `ErrMore`) con una escritura parcial (`nw < nr`). En este caso, los bytes se han leído de `src` pero no se han escrito completamente en `dst`.
-
-Para prevenir la pérdida de datos, `iox.Copy` intenta retroceder el puntero del origen:
-- Si `src` implementa `io.Seeker`, Copy llama a `Seek(nw-nr, io.SeekCurrent)` para rebobinar los bytes no escritos.
-- Si `src` **no** implementa `io.Seeker`, Copy devuelve `ErrNoSeeker` para señalar que los bytes no escritos son irrecuperables.
-
-Esta garantía de retroceso se aplica al bucle genérico de lectura/escritura que controla `iox.Copy`. Si se selecciona la ruta rápida estándar `io.WriterTo` o `io.ReaderFrom`, esa implementación es responsable de su propio avance de fuente y recuperación de escrituras parciales; debe preservar `ErrWouldBlock` / `ErrMore` y hacer que el reintento sea seguro para los bytes que aún no reportó como transferidos.
-
-**Recomendaciones:**
-
-- Usa fuentes con búsqueda (por ejemplo, `*os.File`, `*bytes.Reader`) al copiar a destinos no bloqueantes.
-- Para fuentes sin búsqueda (por ejemplo, sockets de red), usa `CopyPolicy` con `PolicyRetry` para errores semánticos del lado de escritura. Esto garantiza que todos los bytes leídos se escriban antes de devolver, evitando la necesidad de retroceso.
+En una llamada directa a `Read`, `io.EOF` indica el final de la entrada. Procesa los últimos bytes antes de terminar. Si pasas `io.EOF` a `Classify`, obtienes `OutcomeFailure`.
 
 ## Instalación y ejemplo
 
@@ -162,10 +124,12 @@ for {
   - `CopyBuffer(dst Writer, src Reader, buf []byte) (int64, error)`
   - `CopyN(dst Writer, src Reader, n int64) (int64, error)`
   - `CopyNBuffer(dst Writer, src Reader, n int64, buf []byte) (int64, error)`
+  - `CopyPolicy`, `CopyBufferPolicy`, `CopyNPolicy` y `CopyNBufferPolicy` reciben un último argumento de tipo `SemanticPolicy`.
 
 - Tee
   - `TeeReader(r Reader, w Writer) Reader`
   - `TeeWriter(primary, tee Writer) Writer`
+  - `TeeReaderPolicy` y `TeeWriterPolicy` también reciben un último argumento de tipo `SemanticPolicy`.
 
 - Adaptadores
   - `AsWriterTo(r Reader) Reader` (añade `io.WriterTo` vía `iox.Copy`)
@@ -195,7 +159,7 @@ Llama a `Wait.Arm` con la función que usa el ejecutor para encolar trabajo. La 
 
 ## Backoff — espera adaptativa para E/S externa
 
-Cuando `ErrWouldBlock` señala que no es posible progresar, el llamador debe esperar antes de reintentar. `iox.Backoff` proporciona una estrategia de retroceso adaptativo para esta espera.
+Si puedes recibir una notificación de disponibilidad, espérala tras `ErrWouldBlock`. En caso contrario, `iox.Backoff.Wait` suspende la goroutine entre intentos.
 
 **Modelo de progreso de tres niveles:**
 
@@ -258,18 +222,26 @@ Las funciones de copia y tee solo consultan la política cuando reciben directam
 
 ## Rutas rápidas y preservación de semántica
 
-`iox.Copy` usa las rutas rápidas estándar de `io` cuando están disponibles:
+`Copy` da prioridad a `io.WriterTo` del origen y después a `io.ReaderFrom` del destino. El bucle genérico usa el búfer suministrado o uno de 32 KiB por defecto. `CopyN` limita las lecturas al número de bytes pendientes. Puede usar `ReadFrom` del destino y omite `WriteTo` del origen original.
 
-- si `src` implementa `io.WriterTo`, `iox.Copy` llama a `WriteTo`
-- de lo contrario, si `dst` implementa `io.ReaderFrom`, `iox.Copy` llama a `ReadFrom`
-- si no, usa un buffer interno de tamaño fijo (`32KiB`) y un bucle de lectura/escritura
-
-Para preservar `ErrWouldBlock` / `ErrMore` en rutas rápidas, asegúrate de que tus implementaciones de `WriteTo` / `ReadFrom` devuelvan esos errores cuando corresponda. Las rutas rápidas también deben mantener una contabilidad de progreso correcta: el recuento devuelto es el número de bytes realmente transferidos, y los bytes restantes deben seguir disponibles para un reintento posterior o estar representados por un error terminal real.
+El método delegado devuelve el total de bytes transferidos y un error. Devuelve `ErrWouldBlock` o `ErrMore` sin envolver para que la política pueda gestionar la señal. Si el método admite reintentos, debe conservar los bytes pendientes de escritura. `YieldOnWriteWouldBlockPolicy` reintenta cuando cualquiera de los dos métodos devuelve `ErrWouldBlock`, incluso si la señal proviene de una lectura.
 
 Si tienes un `io.Reader`/`io.Writer` normal pero quieres exponer las interfaces de ruta rápida *y* preservar la semántica, envuelve con:
 
 - `iox.AsWriterTo(r)` para añadir un `WriteTo` implementado vía `iox.Copy`
 - `iox.AsReaderFrom(w)` para añadir un `ReadFrom` implementado vía `iox.Copy`
+
+### Lecturas vacías y copias acotadas
+
+En el bucle genérico de lectura y escritura, `Copy` se detiene si una lectura devuelve `(0, nil)` y devuelve `(written, nil)`. Esto puede ocurrir antes del fin de la entrada. Si se delega en `WriteTo` o `ReadFrom`, ese método controla sus propias lecturas.
+
+Si el límite es positivo, `CopyN` y sus variantes devuelven `(n, nil)` en cuanto el destino ha aceptado `n` bytes. Si se alcanza EOF antes de tiempo o la copia termina con `nil` sin llegar al límite, devuelven `io.ErrUnexpectedEOF`. La operación subyacente puede seguir activa después de completar la copia acotada.
+
+### Escrituras parciales
+
+Si el bucle genérico devuelve un error semántico tras una escritura parcial, retrocede en el origen con `seeker.Seek(int64(nw-nr), io.SeekCurrent)`. `nr` es el número de bytes leídos y `nw` el de bytes aceptados por el destino. Si `Seek` falla, su error tiene prioridad sobre el de escritura. Si el origen no implementa `io.Seeker`, se devuelve `ErrNoSeeker`.
+
+Con `CopyPolicy`, `PolicyRetry` conserva los bytes pendientes para reintentar una escritura que devuelve directamente `ErrWouldBlock` o `ErrMore`, incluso si el origen no permite reposicionarse. Si se delega en `WriteTo` o `ReadFrom`, ese método gestiona la posición del origen y la recuperación.
 
 ## Licencia
 

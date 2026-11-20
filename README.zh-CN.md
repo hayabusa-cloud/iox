@@ -11,57 +11,20 @@
 
 ## 概述
 
-`iox` 面向非阻塞 I/O 栈：在这类系统里，“进一步推进需要等待就绪”与“操作仍然活跃”是**正常控制流**，不是失败。
+`iox` 面向非阻塞 I/O 栈。在这类系统中，“等待 I/O 就绪后重试”（`ErrWouldBlock`）和“继续观察同一操作”（`ErrMore`）都是正常的控制流。
 
-它引入两个具有明确契约的语义错误：
+它的复制和分流（tee）函数使用 Go 标准库的 `io.Reader` 和 `io.Writer` 接口。在常见的返回值 `(n, err)` 中，`n` 表示已传输的字节数，`err` 指明调用方下一步该怎么做。无论返回哪种信号，`n` 都可能为零或正数。先将这 `n` 个字节计入传输进度，再处理信号。
 
-- `ErrWouldBlock` — **当前无法继续推进**，必须等待就绪或完成事件。应立即返回；在下一次轮询之后重试。
-- `ErrMore` — **操作仍然活跃**，预期还有后续观测。返回计数可以为零；应处理已返回的数据，并继续轮询。
+## I/O 结果
 
-`iox` 保持标准 `io` 的心智模型：
+| 错误 | `Classify` 的结果 | 调用方的操作 |
+|---|---|---|
+| `nil` | `OutcomeOK` | 继续或结束传输 |
+| `ErrWouldBlock` | `OutcomeWouldBlock` | 等待 I/O 就绪后重试 |
+| `ErrMore` | `OutcomeMore` | 保持操作有效，接收下一次完成通知 |
+| 其他错误 | `OutcomeFailure` | 处理错误时计入已经传输的字节 |
 
-- 返回的计数始终表示“已传输字节数 / 已取得进展”
-- 返回的错误用于驱动控制流（`nil`、语义型非失败信号、或真实失败）
-- 辅助函数与 `io.Reader`、`io.Writer` 兼容，并通过 `io.WriterTo` / `io.ReaderFrom` 做快速路径优化
-
-## 语义契约
-
-对于采用 `iox` 语义的操作：
-
-| 返回错误            | 含义             | 调用方下一步必须做什么      |
-|-----------------|----------------|------------------|
-| `nil`           | 本次调用/传输已成功完成   | 继续你的状态机          |
-| `ErrWouldBlock` | 进一步推进需要等待就绪 | 停止尝试；等待就绪或完成；再重试 |
-| `ErrMore`       | 操作仍然活跃；计数可以为零 | 处理已返回的数据；保持操作活跃；继续轮询 |
-| 其他错误            | 失败             | 按需处理/记录/关闭/退避    |
-
-始终先处理返回计数，再解释返回错误。计数表示已经取得的进展；错误选择下一步控制动作。
-
-补充说明：
-- `iox.Copy` 可能返回 `(written > 0, ErrWouldBlock)` 或 `(written > 0, ErrMore)`，用于表达“已产生部分进展，然后发生停滞”或“已产生部分进展，并需要交付 multi-shot 的后续”。
-- 对于 `(0, nil)` 的 Read，`iox.Copy` 会将其视为“现在停止复制”，并返回 `(written, nil)`，以避免在辅助函数内部隐藏自旋。
-- `CopyN`、`CopyNBuffer` 及其策略变体是有界的“正好复制 n 字节”操作。一旦 `written == n`，它们返回 `nil`；它们不是订阅或 multi-shot 路由的生命周期 API。
-- `Outcome` 的数值只是防御性编码，不是语义顺序。请使用 `switch`、`Classify` 和谓词，而不是 `<`、`>`、`min` 或 `max`。
-
-### 注意：`iox.Copy` 与 `(0, nil)` 的 Read
-
-Go 的 `io.Reader` 契约允许 `Read` 返回 `(0, nil)` 来表示“没有进展”，而不是流结束。行为良好的 Reader 应避免 `(0, nil)`（除非 `len(p) == 0`）。
-
-`iox.Copy` 会把 `(0, nil)` 读视为“现在停止复制”，并返回 `(written, nil)`。这样可以避免在非阻塞或事件循环代码中，把“自旋等待”隐藏在辅助函数内部。如果你需要在多次 `(0, nil)` 之间强制前向进展检测，请在调用方实现该策略。
-
-### 注意：`iox.Copy` 与部分写入恢复
-
-当向非阻塞目标复制时，`dst.Write` 可能返回语义错误（`ErrWouldBlock` 或 `ErrMore`）并伴随部分写入（`nw < nr`）。此时，字节已从 `src` 读出但未完全写入 `dst`。
-
-为防止数据丢失，`iox.Copy` 会尝试回滚源指针：
-- 如果 `src` 实现了 `io.Seeker`，Copy 调用 `Seek(nw-nr, io.SeekCurrent)` 来回退未写入的字节。
-- 如果 `src` **未**实现 `io.Seeker`，Copy 返回 `ErrNoSeeker` 以表明未写入的字节无法恢复。
-
-此回滚保证只适用于 `iox.Copy` 自己拥有的通用读/写循环。如果选择了标准 `io.WriterTo` 或 `io.ReaderFrom` 快速路径，则该快速路径实现负责自己的源位置推进和部分写恢复；它必须保留 `ErrWouldBlock` / `ErrMore`，并保证按返回计数尚未传输的字节可在之后安全重试。
-
-**建议：**
-- 向非阻塞目标复制时，使用可寻址的源（如 `*os.File`、`*bytes.Reader`）。
-- 对于不可寻址的源（如网络套接字），使用 `CopyPolicy` 并为写入端语义错误配置 `PolicyRetry`。这可确保所有已读字节在返回前被写入，从而避免回滚需求。
+直接调用 `Read` 时，`io.EOF` 表示输入结束。先处理最后返回的字节，再结束读取。将 `io.EOF` 传给 `Classify` 会得到 `OutcomeFailure`。
 
 ## 安装与示例
 
@@ -161,10 +124,12 @@ for {
   - `CopyBuffer(dst Writer, src Reader, buf []byte) (int64, error)`
   - `CopyN(dst Writer, src Reader, n int64) (int64, error)`
   - `CopyNBuffer(dst Writer, src Reader, n int64, buf []byte) (int64, error)`
+  - `CopyPolicy`、`CopyBufferPolicy`、`CopyNPolicy` 和 `CopyNBufferPolicy` 的最后一个参数均为 `SemanticPolicy`。
 
 - Tee
   - `TeeReader(r Reader, w Writer) Reader`
   - `TeeWriter(primary, tee Writer) Writer`
+  - `TeeReaderPolicy` 和 `TeeWriterPolicy` 的最后一个参数也都是 `SemanticPolicy`。
 
 - 适配器
   - `AsWriterTo(r Reader) Reader`（通过 `iox.Copy` 添加 `io.WriterTo`）
@@ -194,7 +159,7 @@ for {
 
 ## Backoff — 外部 I/O 的自适应等待
 
-当 `ErrWouldBlock` 表示当前无法取得进展时，调用方必须等待后再重试。`iox.Backoff` 为此提供自适应退避策略。
+如果可以接收就绪通知，遇到 `ErrWouldBlock` 时就等待通知。否则，可以用 `iox.Backoff.Wait` 在两次尝试之间挂起当前 goroutine。
 
 **三层进展模型：**
 
@@ -257,18 +222,26 @@ for {
 
 ## 快速路径与语义保持
 
-`iox.Copy` 在可用时使用标准 `io` 的快速路径：
+`Copy` 优先使用源端的 `io.WriterTo`，其次使用目标端的 `io.ReaderFrom`。通用循环使用传入的缓冲区，未指定时默认使用 32 KiB 的缓冲区。`CopyN` 将读取量限制为剩余字节数。它可以调用目标端的 `ReadFrom`，并跳过原始源端的 `WriteTo`。
 
-- 如果 `src` 实现了 `io.WriterTo`，`iox.Copy` 调用 `WriteTo`
-- 否则如果 `dst` 实现了 `io.ReaderFrom`，`iox.Copy` 调用 `ReadFrom`
-- 否则使用内部固定大小缓冲（`32KiB`）以及读/写循环
-
-为了在快速路径上保持 `ErrWouldBlock` / `ErrMore`，请确保你的 `WriteTo` / `ReadFrom` 实现在合适的情况下返回这些错误。快速路径还必须保持自己的进度计数正确：返回的计数是实际传输的字节数，剩余字节必须仍可在后续重试中取得，或者由真实的终止错误表示。
+受委托的方法返回已传输的总字节数和一个错误。要让策略处理信号，请原样返回 `ErrWouldBlock` 或 `ErrMore`。支持重试的方法必须保留尚未写入的字节。只要其中一个方法返回 `ErrWouldBlock`，`YieldOnWriteWouldBlockPolicy` 就会重试，即使该信号来自读取操作。
 
 如果你只有普通的 `io.Reader` / `io.Writer`，但希望同时提供快速路径接口并保持语义，可以使用下面的包装器：
 
 - `iox.AsWriterTo(r)`：添加由 `iox.Copy` 实现的 `WriteTo`
 - `iox.AsReaderFrom(w)`：添加由 `iox.Copy` 实现的 `ReadFrom`
+
+### 空读与定长复制
+
+在通用读写循环中，如果一次读取返回 `(0, nil)`，`Copy` 会停止并返回 `(written, nil)`。这种情况也可能发生在输入结束之前。委托给 `WriteTo` 或 `ReadFrom` 时，由受委托的方法控制读取。
+
+当 `n` 为正数时，目标端累计接收 `n` 个字节后，`CopyN` 及其变体就返回 `(n, nil)`。如果提前遇到 EOF，或者复制以 `nil` 结束但字节数不足，则返回 `io.ErrUnexpectedEOF`。定长复制结束后，底层操作仍可继续产生完成通知。
+
+### 部分写入
+
+通用循环在部分写入后返回语义错误时，会调用 `seeker.Seek(int64(nw-nr), io.SeekCurrent)` 回退到第一个尚未写入的字节。`nr` 是读取的字节数，`nw` 是目标端已接收的字节数。如果 `Seek` 失败，优先返回其错误。如果源端未实现 `io.Seeker`，则返回 `ErrNoSeeker`。
+
+使用 `CopyPolicy` 时，如果写入直接返回 `ErrWouldBlock` 或 `ErrMore`，且策略选择 `PolicyRetry`，通用循环会保留尚未写入的字节以供重试。源端不能回退时也可以这样做。委托给 `WriteTo` 或 `ReadFrom` 时，由受委托的方法管理源端位置和恢复。
 
 ## 许可证
 

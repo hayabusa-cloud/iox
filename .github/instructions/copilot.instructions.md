@@ -5,19 +5,19 @@
 | Error | Meaning |
 |-------|---------|
 | `nil` | Completion |
-| `ErrWouldBlock` | No progress; retry later |
-| `ErrMore` | Progress made; more coming |
+| `ErrWouldBlock` | Wait for readiness before retrying |
+| `ErrMore` | The operation remains active and another observation is expected |
 | other | Failure |
 
-`ErrWouldBlock` and `ErrMore` are **control flow**, not failures.
+Both signals are non-failure control outcomes. Account for the returned count first. Either signal can accompany zero or positive progress.
 
 ## Classification
 
 | Function | True when |
 |----------|-----------|
-| `IsSemantic(err)` | ErrWouldBlock or ErrMore |
+| `IsSemantic(err)` | Matches ErrWouldBlock or ErrMore, including wrapped errors |
 | `IsNonFailure(err)` | nil or semantic |
-| `IsProgress(err)` | nil or ErrMore |
+| `IsProgress(err)` | `Classify` selects `OutcomeOK` or `OutcomeMore`. WouldBlock takes precedence if both sentinels match. |
 
 ## Backoff Usage
 
@@ -30,18 +30,19 @@
 | **Adapt** | External I/O wait (`iox.Backoff`) |
 
 - Zero-value is ready to use (default: 500µs base, 100ms max)
-- Call `Wait()` on `ErrWouldBlock`, `Reset()` on success
+- Call `Reset()` after positive byte progress, then `Wait()` if the operation would block.
 - Algorithm: Block-based linear scaling with ±12.5% jitter
 
 ## Policy Behavior
 
-`SemanticPolicy` controls helper responses to semantic errors:
+`SemanticPolicy` controls helper responses to exact semantic sentinels. A bounded copy completes when the destination accepts its final requested byte.
 
 | Policy | `ErrWouldBlock` | `ErrMore` |
 |--------|-----------------|-----------|
 | `nil` (default) | Return to caller | Return to caller |
 | `ReturnPolicy` | Return | Return |
 | `YieldPolicy` | Yield + retry | Return to caller |
+| `YieldOnWriteWouldBlockPolicy` | Yield on writes and on delegated `WriteTo` or `ReadFrom` calls, then retry. Return on direct reads. | Return |
 | Custom | `OnWouldBlock(op)` | `OnMore(op)` |
 
 ## Tee Count Semantics

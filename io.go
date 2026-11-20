@@ -8,61 +8,29 @@ import (
 	"io"
 )
 
-// Copy copies from src to dst until either EOF is reached on src or an error occurs.
+// Copy copies from src to dst and returns the number of bytes written.
+// [ErrWouldBlock] and [ErrMore] can accompany partial progress.
 //
-// iox semantics extension:
-//   - ErrWouldBlock: return immediately because the next step would block.
-//     written may be > 0 (partial progress); retry after readiness/completion.
-//   - ErrMore: return immediately because the operation remains active;
-//     written may be zero or positive; keep polling for more completions.
+// A [WriterTo] source takes precedence over a [ReaderFrom] destination.
+// The selected method owns its progress and partial-write recovery.
+// Otherwise Copy uses a read/write loop and stops on a (0, nil) read.
+// An [io.EOF] from Read or a delegated method ends a successful copy.
+// Copy returns an [io.EOF] from a direct Write to the caller.
 //
-// Partial write recovery (Seeker rollback):
-//
-// If dst.Write returns a semantic error (ErrWouldBlock or ErrMore) with a partial
-// write (nw < nr), Copy attempts to roll back the source pointer by calling
-// src.Seek(nw-nr, io.SeekCurrent) if src implements io.Seeker. This allows the
-// caller to retry Copy without data loss.
-//
-// If src does NOT implement io.Seeker and a partial write occurs with a semantic
-// error, Copy returns ErrNoSeeker to prevent silent data corruption. Callers
-// using non-blocking destinations with non-seekable sources (e.g., sockets) should
-// use CopyPolicy with PolicyRetry to ensure all read bytes are written before
-// returning.
-//
-// Fast path boundary:
-//
-// If src implements io.WriterTo or dst implements io.ReaderFrom, Copy delegates
-// to that method, matching the standard io.Copy fast-path contract. In that
-// case the fast-path implementation owns its own source advancement and partial
-// write recovery; it must return ErrWouldBlock/ErrMore directly when those
-// semantic boundaries occur.
+// If a generic write accepts only part of a read and returns a semantic
+// error, Copy rewinds the unwritten suffix on a [Seeker]. It returns the
+// seek error if rewinding fails, or [ErrNoSeeker] if src cannot seek.
 func Copy(dst Writer, src Reader) (written int64, err error) {
 	return copyBuffer(dst, src, nil)
 }
 
-// CopyPolicy is like Copy but consults policy when encountering semantic errors.
+// CopyPolicy is [Copy] with a policy for exact [ErrWouldBlock] and [ErrMore]
+// signals. A nil policy uses Copy. [PolicyRetry] calls Yield before resuming.
 //
-// Semantics:
-//   - If policy is nil, behavior is identical to Copy (default non-blocking semantics).
-//   - If policy returns PolicyRetry on ErrWouldBlock/ErrMore, the engine will
-//     call policy.Yield(op) and retry from that point; otherwise it returns.
-//
-// Partial write recovery:
-//
-// When policy returns PolicyReturn (not retry) on a semantic error with partial
-// write progress, CopyPolicy attempts Seeker rollback on src (same as Copy).
-// If src is not seekable, ErrNoSeeker is returned to prevent silent data loss.
-// When policy returns PolicyRetry, the engine retries the write internally,
-// ensuring all read bytes are written before the next read—no rollback needed.
-//
-// For non-seekable sources (e.g., network sockets) where data integrity is
-// required, configure policy to return PolicyRetry for write-side semantic
-// errors. This guarantees forward progress without data loss.
-//
-// When a WriterTo/ReaderFrom fast path is selected, CopyPolicy can only observe
-// the aggregate (n, error) returned by that fast path. The fast-path method is
-// responsible for preserving semantic errors and for making retry safe across
-// partial progress.
+// On a partial write, the generic loop retains the unwritten suffix across
+// retries. Returning the signal uses Copy's seek recovery. For a delegated
+// [WriterTo] or [ReaderFrom], the policy receives the [Op] for that method.
+// A retry calls the method again, so it must preserve any unwritten bytes.
 func CopyPolicy(dst Writer, src Reader, policy SemanticPolicy) (written int64, err error) {
 	if policy == nil {
 		return copyBuffer(dst, src, nil)
@@ -70,13 +38,9 @@ func CopyPolicy(dst Writer, src Reader, policy SemanticPolicy) (written int64, e
 	return copyBufferPolicy(dst, src, nil, policy, -1)
 }
 
-// CopyBuffer is like Copy but stages through buf if needed.
-// If buf is nil, an internal fixed-size buffer is used.
-// If buf has zero length, CopyBuffer panics.
-//
-// Partial write recovery: same Seeker rollback semantics as Copy. Returns
-// ErrNoSeeker if src is not seekable and a partial write occurs with a
-// semantic error. See Copy documentation for details.
+// CopyBuffer is [Copy] with caller-supplied scratch space for the generic
+// loop. A nil buf selects the default [Buffer]. A non-nil, empty buf panics.
+// [WriterTo] and [ReaderFrom] perform their own buffering.
 func CopyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 	if buf != nil && len(buf) == 0 {
 		panic("empty buffer in CopyBuffer")
@@ -84,16 +48,8 @@ func CopyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 	return copyBuffer(dst, src, buf)
 }
 
-// CopyBufferPolicy is like CopyBuffer but consults policy on semantic errors.
-//
-//   - nil policy: identical to CopyBuffer
-//   - non-nil: PolicyRetry triggers policy.Yield(op) and a retry; otherwise the
-//     semantic error is returned unchanged.
-//
-// Partial write recovery: same semantics as CopyPolicy. When policy returns
-// PolicyReturn on a partial write, Seeker rollback is attempted; returns
-// ErrNoSeeker if src is not seekable. When policy returns PolicyRetry, the
-// write is retried internally without rollback.
+// CopyBufferPolicy is [CopyPolicy] with the buffer rules of [CopyBuffer].
+// A nil policy uses CopyBuffer.
 func CopyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy) (written int64, err error) {
 	if buf != nil && len(buf) == 0 {
 		panic("empty buffer in CopyBufferPolicy")
@@ -104,22 +60,15 @@ func CopyBufferPolicy(dst Writer, src Reader, buf []byte, policy SemanticPolicy)
 	return copyBufferPolicy(dst, src, buf, policy, -1)
 }
 
-// CopyN copies n bytes (or until an error) from src to dst.
-// For n > 0, it returns nil exactly when the destination accepts n bytes.
-// For n <= 0, it returns (0, nil) without reading or writing.
+// CopyN copies n bytes from src to dst. For n <= 0 it returns (0, nil).
+// For n > 0 it returns (n, nil) once the destination has accepted n bytes.
+// An early EOF or a short copy with nil error returns [ErrUnexpectedEOF].
+// Other errors can accompany the number of bytes already written.
 //
-// iox semantics extension:
-//   - ErrWouldBlock / ErrMore may be returned when progress stops early;
-//     written may be > 0 and is the number of bytes already copied.
-//
-// CopyN is a bounded "copy exactly n bytes" operation. If written == n, it
-// returns nil at that abstraction boundary even when the lower layer might have
-// a separate live continuation. Keep subscription or multi-shot route lifecycle
-// ownership above iox.
-//
-// The generic copy loop preserves Copy's partial-write recovery for seekable
-// sources. After a semantic error, retry with n-written bytes. A destination
-// ReaderFrom implementation owns its own recovery, as described in Copy.
+// CopyN limits reads to the remaining byte count. It can delegate to
+// [ReaderFrom] on dst. Otherwise it uses [Copy]'s generic loop and
+// partial-write recovery. After a recoverable interruption, resume with
+// n-written bytes.
 func CopyN(dst Writer, src Reader, n int64) (written int64, err error) {
 	if n <= 0 {
 		return 0, nil
@@ -136,10 +85,9 @@ func CopyN(dst Writer, src Reader, n int64) (written int64, err error) {
 	return finishCopyN(n, written, err)
 }
 
-// CopyNPolicy is like CopyN but consults policy on semantic errors while
-// bytes remain to be written. Once the destination reports n bytes written
-// in total, CopyNPolicy returns (n, nil) before calling policy again.
-// A nil policy is equivalent to CopyN.
+// CopyNPolicy is [CopyN] with a policy for exact semantic signals while bytes
+// remain. It skips policy callbacks for a signal received with the final
+// requested byte. A nil policy uses CopyN.
 func CopyNPolicy(dst Writer, src Reader, n int64, policy SemanticPolicy) (written int64, err error) {
 	if n <= 0 {
 		return 0, nil
@@ -152,9 +100,8 @@ func CopyNPolicy(dst Writer, src Reader, n int64, policy SemanticPolicy) (writte
 	return finishCopyN(n, written, err)
 }
 
-// CopyNBuffer is like CopyN but stages through buf if needed.
-// If buf is nil, an internal fixed-size buffer is used.
-// For n > 0, a non-nil buffer of length zero causes a panic.
+// CopyNBuffer is [CopyN] with scratch space for the generic loop. A nil buf
+// selects the default [Buffer]. For n > 0, a non-nil, empty buf panics.
 func CopyNBuffer(dst Writer, src Reader, n int64, buf []byte) (written int64, err error) {
 	if n <= 0 {
 		return 0, nil
@@ -171,8 +118,8 @@ func CopyNBuffer(dst Writer, src Reader, n int64, buf []byte) (written int64, er
 	return finishCopyN(n, written, err)
 }
 
-// CopyNBufferPolicy is like CopyNPolicy with the buffer rules of CopyNBuffer.
-// A nil policy is equivalent to CopyNBuffer.
+// CopyNBufferPolicy is [CopyNPolicy] with the buffer rules of [CopyNBuffer].
+// A nil policy uses CopyNBuffer.
 func CopyNBufferPolicy(dst Writer, src Reader, n int64, buf []byte, policy SemanticPolicy) (written int64, err error) {
 	if n <= 0 {
 		return 0, nil

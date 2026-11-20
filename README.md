@@ -11,57 +11,20 @@ Language: **English** | [简体中文](./README.zh-CN.md) | [Español](./README.
 
 ## Overview
 
-`iox` is for non-blocking I/O stacks where “further progress requires readiness” and “the operation remains active” are **normal control flow**, not failures.
+`iox` is for non-blocking I/O stacks where “wait for readiness before retrying” (`ErrWouldBlock`) and “keep observing the same operation” (`ErrMore`) are normal control flow.
 
-It introduces two semantic errors with explicit contracts:
+Its copy and tee helpers use Go’s standard `io.Reader` and `io.Writer` interfaces. In the familiar `(n, err)` result, `n` reports bytes already transferred and `err` guides the caller’s next step. Either signal can accompany zero or more bytes, so account for `n` first.
 
-- `ErrWouldBlock` — **no further progress is possible** without waiting for readiness/completions. Return immediately; retry after your next polling.
-- `ErrMore` — **the operation remains active** and further observations are expected. The count may be zero; process any returned data and keep polling.
+## I/O results
 
-`iox` keeps standard `io` mental models intact:
-
-- returned counts always mean “bytes transferred / progress made”
-- returned errors drive control flow (`nil`, semantic non-failure, or real failure)
-- helpers are compatible with `io.Reader`, `io.Writer`, and optimize via `io.WriterTo` / `io.ReaderFrom`
-
-## Semantics contract
-
-For operations that adopt `iox` semantics:
-
-| Return error | Meaning | What the caller must do next |
+| Error | `Classify` result | Caller action |
 |---|---|---|
-| `nil` | completed successfully for this call / transfer | continue your state machine |
-| `ErrWouldBlock` | further progress requires readiness | stop attempting; wait for readiness/completion; retry |
-| `ErrMore` | operation remains active; count may be zero | process returned data; keep the operation active; continue polling |
-| other error | failure | handle/log/close/backoff as appropriate |
+| `nil` | `OutcomeOK` | Continue or finish the transfer |
+| `ErrWouldBlock` | `OutcomeWouldBlock` | Wait for readiness before retrying |
+| `ErrMore` | `OutcomeMore` | Keep the operation active and observe the next completion |
+| Other error | `OutcomeFailure` | Handle the error with the count already reported |
 
-Always process the returned count before interpreting the returned error. The count reports progress already made; the error selects the next control action.
-
-Notes:
-- `iox.Copy` may return `(written > 0, ErrWouldBlock)` or `(written > 0, ErrMore)` to report partial progress before stalling or before delivering a multi-shot continuation.
-- `(0, nil)` reads are treated as “stop copying now” and return `(written, nil)` to avoid hidden spinning inside helpers.
-- `CopyN`, `CopyNBuffer`, and their policy variants are bounded "copy exactly n bytes" operations. Once `written == n`, they return `nil`; they are not subscription or multi-shot route lifecycle APIs.
-- `Outcome` numeric values are defensive encodings, not a semantic order. Use `switch`, `Classify`, and predicates instead of `<`, `>`, `min`, or `max`.
-
-### Note: `iox.Copy` and `(0, nil)` reads
-
-The Go `io.Reader` contract allows `Read` to return `(0, nil)` to mean “no progress”, not end-of-stream. Well-behaved Readers should avoid `(0, nil)` except when `len(p) == 0`.
-
-`iox.Copy` intentionally treats a `(0, nil)` read as “stop copying now” and returns `(written, nil)`. This avoids hidden spinning inside a helper in non-blocking/event-loop code. If you need strict forward-progress detection across repeated `(0, nil)`, implement that policy at your call site.
-
-### Note: `iox.Copy` and partial write recovery
-
-When copying to a non-blocking destination, `dst.Write` may return a semantic error (`ErrWouldBlock` or `ErrMore`) with a partial write (`nw < nr`). In this case, bytes have been read from `src` but not fully written to `dst`.
-
-To prevent data loss, `iox.Copy` attempts to roll back the source pointer:
-- If `src` implements `io.Seeker`, Copy calls `Seek(nw-nr, io.SeekCurrent)` to rewind the unwritten bytes.
-- If `src` does **not** implement `io.Seeker`, Copy returns `ErrNoSeeker` to signal that unwritten bytes are unrecoverable.
-
-This rollback guarantee applies to the generic read/write loop owned by `iox.Copy`. If the standard `io.WriterTo` or `io.ReaderFrom` fast path is selected, that fast-path implementation owns source advancement and partial-write recovery; it must preserve `ErrWouldBlock` / `ErrMore` and make retry safe for the bytes it reports as not yet transferred.
-
-**Recommendations:**
-- Use seekable sources (e.g., `*os.File`, `*bytes.Reader`) when copying to non-blocking destinations.
-- For non-seekable sources (e.g., network sockets), use `CopyPolicy` with `PolicyRetry` for write-side semantic errors. This ensures all read bytes are written before returning, avoiding the need for rollback.
+On a direct `Read`, `io.EOF` marks the end of input. Process any final bytes before finishing. Passing `io.EOF` to `Classify` yields `OutcomeFailure`.
 
 ## Installation and example
 
@@ -161,10 +124,12 @@ for {
   - `CopyBuffer(dst Writer, src Reader, buf []byte) (int64, error)`
   - `CopyN(dst Writer, src Reader, n int64) (int64, error)`
   - `CopyNBuffer(dst Writer, src Reader, n int64, buf []byte) (int64, error)`
+  - `CopyPolicy`, `CopyBufferPolicy`, `CopyNPolicy`, and `CopyNBufferPolicy` take a final `SemanticPolicy` argument.
 
 - Tee
   - `TeeReader(r Reader, w Writer) Reader`
   - `TeeWriter(primary, tee Writer) Writer`
+  - `TeeReaderPolicy` and `TeeWriterPolicy` also take a final `SemanticPolicy` argument.
 
 - Adapters
   - `AsWriterTo(r Reader) Reader` (adds `io.WriterTo` via `iox.Copy`)
@@ -194,7 +159,7 @@ Call `Wait.Arm` with the driver’s enqueue function. The trigger can signal bef
 
 ## Backoff — Adaptive Waiting for External I/O
 
-When `ErrWouldBlock` signals that no progress is possible, the caller must wait before retrying. `iox.Backoff` provides an adaptive back-off strategy for this waiting.
+When a readiness notification is available, wait for it after `ErrWouldBlock`. Otherwise, `iox.Backoff.Wait` sleeps the calling goroutine between attempts.
 
 **Three-Tier Progress Model:**
 
@@ -257,18 +222,26 @@ Copy and tee helpers consult the policy only for the exact `ErrMore` and `ErrWou
 
 ## Fast paths and semantic preservation
 
-`iox.Copy` uses standard "io" fast paths when available:
+`Copy` prefers the source’s `io.WriterTo`, then the destination’s `io.ReaderFrom`. The generic loop uses the supplied buffer or a 32 KiB default. `CopyN` limits the source to the remaining byte count. It can use the destination’s `ReadFrom` and bypasses the original source’s `WriteTo`.
 
-- if `src` implements `io.WriterTo`, `iox.Copy` calls `WriteTo`
-- else if `dst` implements `io.ReaderFrom`, `iox.Copy` calls `ReadFrom`
-- else it uses an internal fixed-size buffer (`32KiB`) and a read/write loop
-
-To preserve `ErrWouldBlock` / `ErrMore` across fast paths, ensure your `WriteTo` / `ReadFrom` implementations return those errors when appropriate. Fast paths must also keep their own progress accounting honest: the returned count is the number of bytes actually transferred, and any remaining bytes must still be available to a later retry or be represented by a real terminal error.
+A delegated method reports the total bytes transferred and one error. Return `ErrWouldBlock` or `ErrMore` unwrapped so a policy can handle the signal. A method that supports retries must preserve any unwritten bytes. `YieldOnWriteWouldBlockPolicy` retries `ErrWouldBlock` from either method, even when a read produced it.
 
 If you have a plain `io.Reader`/`io.Writer` but want the fast-path interfaces to exist *and* preserve semantics, wrap with:
 
 - `iox.AsWriterTo(r)` to add a `WriteTo` implemented via `iox.Copy`
 - `iox.AsReaderFrom(w)` to add a `ReadFrom` implemented via `iox.Copy`
+
+### Empty reads and bounded copies
+
+In the generic read/write loop, `Copy` stops on a `(0, nil)` read and returns `(written, nil)`. Such a read can occur before EOF. A delegated `WriteTo` or `ReadFrom` controls its own reads.
+
+For a positive limit, `CopyN` and its variants return `(n, nil)` once the destination has accepted `n` bytes. An early EOF or a shorter copy ending with `nil` yields `io.ErrUnexpectedEOF`. The underlying multi-shot operation can remain active after the bounded copy finishes.
+
+### Partial writes
+
+When the generic loop returns a semantic write error after a short write, it rewinds the unwritten suffix with `seeker.Seek(int64(nw-nr), io.SeekCurrent)`. Here `nr` is the number of bytes read and `nw` the number accepted by the destination. A failed seek takes precedence over the write error. A source without `io.Seeker` yields `ErrNoSeeker`.
+
+With `CopyPolicy`, `PolicyRetry` retains that suffix across retries of an exact `ErrWouldBlock` or `ErrMore`, including on non-seekable sources. A delegated `WriteTo` or `ReadFrom` owns its own source position and recovery.
 
 ## License
 
