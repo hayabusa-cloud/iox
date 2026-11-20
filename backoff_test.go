@@ -5,7 +5,10 @@
 package iox_test
 
 import (
+	"math"
+	"math/big"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"code.hybscloud.com/iox"
@@ -27,26 +30,49 @@ func TestBackoff_ZeroValue(t *testing.T) {
 }
 
 func TestBackoff_ZeroValueWait(t *testing.T) {
-	// Zero-value Backoff should work with Wait() without prior configuration
-	var b iox.Backoff
+	synctest.Test(t, func(t *testing.T) {
+		var b iox.Backoff
+		checkBackoffWait(t, &b, iox.DefaultBackoffBase)
+		if got := b.Block(); got != 2 {
+			t.Errorf("after first Wait, Block() = %d, want 2", got)
+		}
+	})
+}
 
+// The caller runs in a synctest bubble so elapsed time measures the requested sleep.
+func checkBackoffWait(t *testing.T, b *iox.Backoff, nominal time.Duration) {
+	t.Helper()
 	start := time.Now()
 	b.Wait()
 	elapsed := time.Since(start)
-
-	// Should have waited approximately DefaultBackoffBase (500µs) ± jitter
-	// Allow generous tolerance for test stability (OS scheduling adds latency)
-	minWait := iox.DefaultBackoffBase * 7 / 8 // -12.5% jitter
-	maxWait := iox.DefaultBackoffBase * 10    // generous upper bound for CI/slow systems
-
+	minWait, maxWait := nominal-nominal/8, nominal+nominal/8
 	if elapsed < minWait || elapsed > maxWait {
-		t.Errorf("Wait() elapsed = %v, expected between %v and %v", elapsed, minWait, maxWait)
+		t.Errorf("Wait() slept %v, want [%v, %v]", elapsed, minWait, maxWait)
 	}
+}
 
-	// After first Wait, should be in block 2
-	if got := b.Block(); got != 2 {
-		t.Errorf("After Wait(), Block() = %d, want 2", got)
-	}
+func TestBackoffNextDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var b iox.Backoff
+		for i, block := range []int{1, 2, 2, 3, 3, 3, 4} {
+			nominal := time.Duration(block) * iox.DefaultBackoffBase
+			if got := b.Duration(); got != nominal {
+				t.Fatalf("attempt %d: nominal %v, want %v", i+1, got, nominal)
+			}
+			if i%2 == 1 {
+				checkBackoffWait(t, &b, nominal)
+				continue
+			}
+			start := time.Now()
+			delay := b.NextDelay()
+			if elapsed := time.Since(start); elapsed != 0 {
+				t.Fatalf("NextDelay advanced the clock by %v", elapsed)
+			}
+			if delay < nominal-nominal/8 || delay > nominal+nominal/8 {
+				t.Fatalf("block %d: delay %v outside jitter bounds for %v", block, delay, nominal)
+			}
+		}
+	})
 }
 
 func TestBackoff_Duration(t *testing.T) {
@@ -113,15 +139,15 @@ func TestBackoff_DurationMaxCap(t *testing.T) {
 		t.Errorf("Block 1 Duration() = %v, want 50ms", got)
 	}
 
-	b.Wait() // End block 1
+	b.NextDelay() // End block 1.
 
 	// Block 2: 100ms (would be 100ms, equals max)
 	if got := b.Duration(); got != 100*time.Millisecond {
 		t.Errorf("Block 2 Duration() = %v, want 100ms", got)
 	}
 
-	b.Wait()
-	b.Wait() // End block 2
+	b.NextDelay()
+	b.NextDelay() // End block 2.
 
 	// Block 3: would be 150ms, capped at 100ms
 	if got := b.Duration(); got != iox.DefaultBackoffMax {
@@ -138,14 +164,14 @@ func TestBackoff_LinearCurve(t *testing.T) {
 	if b.Duration() != base {
 		t.Errorf("Block 1 duration mismatch")
 	}
-	b.Wait()
+	b.NextDelay()
 
 	// Block 2: 2 iterations at 200µs
 	if b.Block() != 2 || b.Duration() != 2*base {
 		t.Errorf("Block 2 transition failed: got block %d, duration %v", b.Block(), b.Duration())
 	}
-	b.Wait()
-	b.Wait()
+	b.NextDelay()
+	b.NextDelay()
 
 	// Block 3: 3 iterations at 300µs
 	if b.Block() != 3 || b.Duration() != 3*base {
@@ -158,7 +184,7 @@ func TestBackoff_MaxCap(t *testing.T) {
 	b.SetBase(10 * time.Millisecond)
 	b.SetMax(15 * time.Millisecond)
 
-	b.Wait() // Ends Block 1
+	b.NextDelay() // End block 1.
 	// Block 2 duration would be 20ms, should cap at 15ms
 	if b.Duration() != 15*time.Millisecond {
 		t.Errorf("Expected cap at 15ms, got %v", b.Duration())
@@ -167,8 +193,8 @@ func TestBackoff_MaxCap(t *testing.T) {
 
 func TestBackoff_Reset(t *testing.T) {
 	var b iox.Backoff
-	b.Wait()
-	b.Wait()
+	b.NextDelay()
+	b.NextDelay()
 	if b.Block() == 1 {
 		t.Errorf("Should have advanced")
 	}
@@ -179,35 +205,62 @@ func TestBackoff_Reset(t *testing.T) {
 }
 
 func TestBackoff_WaitMaxCap(t *testing.T) {
-	// This test exercises the capping branch in Wait() (lines 60-62 of backoff.go).
-	// We set base=10ms and max=15ms, so:
-	//   Block 1: d = 10ms (no cap)
-	//   Block 2: d = 20ms > 15ms → capped to 15ms
-	var b iox.Backoff
-	b.SetBase(10 * time.Millisecond)
-	b.SetMax(15 * time.Millisecond)
+	synctest.Test(t, func(t *testing.T) {
+		var b iox.Backoff
+		b.SetBase(10 * time.Millisecond)
+		b.SetMax(15 * time.Millisecond)
 
-	// Block 1: 1 iteration, d = 10ms (under max)
-	b.Wait()
+		checkBackoffWait(t, &b, 10*time.Millisecond)
+		checkBackoffWait(t, &b, 15*time.Millisecond)
+		if got := b.Block(); got != 2 {
+			t.Errorf("after capped Wait, Block() = %d, want 2", got)
+		}
+	})
+}
 
-	// Now in block 2: d = 20ms, should be capped to 15ms
-	// Call Wait() to exercise the capping branch inside Wait()
-	start := time.Now()
-	b.Wait()
-	elapsed := time.Since(start)
+func TestBackoffCappedProduct(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var b iox.Backoff
+		const capDelay = 8 * time.Millisecond
+		b.SetBase(1 << 62)
+		b.SetMax(capDelay)
+		// Blocks two and four cross the signed and unsigned 64-bit limits.
+		for range 7 {
+			if d := b.Duration(); d != capDelay {
+				t.Fatalf("block %d: nominal %v, want %v", b.Block(), d, capDelay)
+			}
+			checkBackoffWait(t, &b, capDelay)
+		}
+	})
+}
 
-	// Should have waited approximately 15ms (capped) ± jitter
-	// Allow generous tolerance for OS scheduling
-	minWait := 10 * time.Millisecond  // allow some slack below
-	maxWait := 500 * time.Millisecond // generous upper bound for CI
-
-	if elapsed < minWait || elapsed > maxWait {
-		t.Errorf("Wait() with cap: elapsed = %v, expected between %v and %v", elapsed, minWait, maxWait)
-	}
-
-	// Verify we're now in block 2 (after 2 waits in block 2, we'd be in block 3)
-	// After 1 wait in block 2, we should still be in block 2
-	if got := b.Block(); got != 2 {
-		t.Errorf("After capped Wait(), Block() = %d, want 2", got)
-	}
+func TestBackoffJitterAcrossDurationRange(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// At 1024 ns the sampled adjustment equals the jitter numerator.
+		var unit iox.Backoff
+		unit.SetBase(1024)
+		unit.SetMax(1024)
+		for _, d := range []time.Duration{1, 1023, 1025, math.MaxInt64 / 128, 1 << 56, 1<<62 + 31, math.MaxInt64} {
+			nominal := big.NewInt(int64(d))
+			for range 256 {
+				// Sample block one to isolate jitter from the block multiplication.
+				unit.Reset()
+				b := unit
+				b.SetBase(d)
+				b.SetMax(d)
+				rate := int64(unit.NextDelay() - 1024)
+				var exact big.Int
+				exact.Mul(nominal, big.NewInt(rate))
+				exact.Quo(&exact, big.NewInt(1024))
+				exact.Add(&exact, nominal)
+				want := time.Duration(math.MaxInt64)
+				if exact.IsInt64() {
+					want = time.Duration(exact.Int64())
+				}
+				if got := b.NextDelay(); got != want {
+					t.Fatalf("nominal %v, jitter %d/1024: got %v, want %v", d, rate, got, want)
+				}
+			}
+		}
+	})
 }

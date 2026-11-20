@@ -202,15 +202,12 @@ for {
 
 Process any returned bytes before waiting or returning. This loop propagates `ErrMore` unchanged and returns control on `(0, nil)` without treating it as EOF.
 
-**Algorithm:** Block-based linear scaling with ±12.5% jitter to prevent thundering herds.
-- Block 1: 1 sleep of `base`
-- Block 2: 2 sleeps of `2×base`
-- Block n: n sleeps of `min(n×base, max)`
+Block `n` contains `n` retry intervals. `Duration()` reports the nominal interval, `min(n × base, max)`. Jitter varies each interval by up to 12.5%, so it can exceed `max`.
 
-**Methods:**
-- `Wait()` — sleep for the current duration, then advance
-- `Reset()` — restore to block 1
-- `SetBase(d)` / `SetMax(d)` — configure timing
+- `NextDelay()` advances the schedule once and returns the interval for a retry timer.
+- `Wait()` calls `NextDelay()` and sleeps the calling goroutine for that interval.
+- `Reset()` returns to block 1 and preserves the base and cap.
+- `SetBase(d)` and `SetMax(d)` accept positive durations and preserve the current block.
 
 ## Tee semantics (counts and errors)
 

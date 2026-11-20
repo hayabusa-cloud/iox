@@ -204,17 +204,12 @@ for {
 
 Traitez les octets renvoyés avant d'attendre ou de retourner. Cette boucle propage `ErrMore` sans modification et rend le contrôle sur `(0, nil)` sans l'interpréter comme EOF.
 
-**Algorithme :** Mise à l'échelle linéaire par blocs avec ±12.5% de jitter pour éviter les effets de ruée.
+Le bloc `n` contient `n` intervalles entre tentatives. `Duration()` renvoie l’intervalle nominal, `min(n × base, max)`. Chaque intervalle peut s’en écarter de 12,5 % au plus et dépasser `max`.
 
-- Bloc 1 : 1 attente de `base`
-- Bloc 2 : 2 attentes de `2×base`
-- Bloc n : n attentes de `min(n×base, max)`
-
-**Méthodes :**
-
-- `Wait()` — attend pendant la durée actuelle, puis avance
-- `Reset()` — restaure au bloc 1
-- `SetBase(d)` / `SetMax(d)` — configurer les durées
+- `NextDelay()` avance d’un intervalle et renvoie sa durée pour armer le temporisateur de la prochaine tentative.
+- `Wait()` appelle `NextDelay()` et suspend la goroutine appelante pendant cet intervalle.
+- `Reset()` revient au bloc 1 et conserve la durée de base et le plafond.
+- `SetBase(d)` et `SetMax(d)` acceptent des durées positives et conservent le bloc en cours.
 
 ## Sémantique de Tee (comptes et erreurs)
 

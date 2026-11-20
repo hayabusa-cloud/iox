@@ -203,17 +203,12 @@ for {
 
 Procesa los bytes devueltos antes de esperar o retornar. Este bucle propaga `ErrMore` sin cambios y devuelve el control con `(0, nil)` sin interpretarlo como EOF.
 
-**Algoritmo:** Escalado lineal basado en bloques con ±12.5% de jitter para prevenir efectos de estampida.
+El bloque `n` contiene `n` intervalos de reintento. `Duration()` devuelve el intervalo nominal, `min(n × base, max)`. Cada intervalo puede variar hasta un 12,5 % respecto al nominal y superar `max`.
 
-- Bloque 1: 1 espera de `base`
-- Bloque 2: 2 esperas de `2×base`
-- Bloque n: n esperas de `min(n×base, max)`
-
-**Métodos:**
-
-- `Wait()` — espera durante la duración actual y luego avanza
-- `Reset()` — restaura al bloque 1
-- `SetBase(d)` / `SetMax(d)` — configurar tiempos
+- `NextDelay()` avanza un intervalo y devuelve su duración para programar el temporizador de reintento.
+- `Wait()` llama a `NextDelay()` y suspende la goroutine que hace la llamada durante ese intervalo.
+- `Reset()` vuelve al bloque 1 y conserva la duración base y el límite.
+- `SetBase(d)` y `SetMax(d)` aceptan duraciones positivas y conservan el bloque actual.
 
 ## Semántica de Tee (conteos y errores)
 
