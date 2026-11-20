@@ -168,6 +168,12 @@ for {
   - `Backoff` — retroceso adaptativo para espera de E/S externa
   - `DefaultBackoffBase` (500µs), `DefaultBackoffMax` (100ms)
 
+## E/S reanudable
+
+`Step.Next` devuelve un valor, un error y un `Wait`. Si `Wait` tiene su valor cero, el paso ha terminado. `Finish` proporciona el resultado final. `Await` describe la espera de un valor de un tipo concreto y la continuación que devuelve el siguiente paso.
+
+Llama a `Wait.Arm` con la función que usa el ejecutor para encolar trabajo. La fuente puede emitir una señal antes de que `Arm` regrese. La primera llamada aceptada a `Signal.Deliver` encola un `Ready`. Un trabajador puede reclamarlo una sola vez con `TryResume` para ejecutar la continuación. Si `Deliver` devuelve `false`, la fuente conserva el valor. [Ejemplo de finalización tipada](example_await_test.go)
+
 ## Backoff — espera adaptativa para E/S externa
 
 Cuando `ErrWouldBlock` señala que no es posible progresar, el llamador debe esperar antes de reintentar. `iox.Backoff` proporciona una estrategia de retroceso adaptativo para esta espera.

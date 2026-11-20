@@ -167,6 +167,12 @@ for {
   - `Backoff` — 外部 I/O 待機のための適応型バックオフ
   - `DefaultBackoffBase` (500µs)、`DefaultBackoffMax` (100ms)
 
+## 再開可能な I/O
+
+`Step.Next` は値、エラー、`Wait` を返します。`Wait` がゼロ値なら、そのステップは完了しています。`Finish` は完了時の結果を返すステップを作ります。`Await` には、指定した型の値を待つ条件と、その値から次のステップを返す継続を渡します。
+
+`Wait.Arm` には、実行側のキューに処理を追加する関数を渡します。`Arm` が戻る前にシグナルが届くこともあります。最初に受理された `Signal.Deliver` が `Ready` を 1 件キューに入れます。ワーカーは `TryResume` で一度だけその処理を引き受け、継続を実行できます。`Deliver` が `false` を返した場合、値は引き続き送信元が所有します。 [型付きの値を受け取る例](example_await_test.go)
+
 ## Backoff — 外部 I/O のための適応型待機
 
 `ErrWouldBlock` が進捗不可を示した場合、呼び出し側は再試行前に待機する必要があります。`iox.Backoff` はこの待機のための適応型バックオフ戦略を提供します。

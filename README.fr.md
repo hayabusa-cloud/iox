@@ -169,6 +169,12 @@ for {
   - `Backoff` — attente adaptative pour l'E/S externe
   - `DefaultBackoffBase` (500µs), `DefaultBackoffMax` (100ms)
 
+## E/S reprenables
+
+`Step.Next` renvoie une valeur, une erreur et un `Wait`. Si `Wait` a sa valeur zéro, l’étape est terminée. `Finish` fournit le résultat final. `Await` décrit l’attente d’une valeur d’un type donné et la continuation qui renvoie l’étape suivante.
+
+Passez à `Wait.Arm` la fonction de mise en file de l’exécuteur. La source peut émettre un signal avant le retour de `Arm`. Le premier appel accepté à `Signal.Deliver` place un `Ready` dans la file. Un seul appel à `TryResume` peut le consommer et exécuter la continuation. Si `Deliver` renvoie `false`, la source conserve la valeur. [Exemple de réception d’une valeur typée](example_await_test.go)
+
 ## Backoff — attente adaptative pour E/S externe
 
 Quand `ErrWouldBlock` signale qu'aucun progrès n'est possible, l'appelant doit attendre avant de réessayer. `iox.Backoff` fournit une stratégie d'attente adaptative pour ce cas.

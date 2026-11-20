@@ -167,6 +167,12 @@ for {
   - `Backoff` — adaptive back-off for external I/O waiting
   - `DefaultBackoffBase` (500µs), `DefaultBackoffMax` (100ms)
 
+## Resumable I/O
+
+`Step.Next` returns a value, an error and a `Wait`. A zero wait means the step has finished. `Finish` supplies the terminal result. `Await` describes a wait for a typed value and a continuation that returns the next step.
+
+Call `Wait.Arm` with the driver’s enqueue function. The trigger can signal before `Arm` returns. The first accepted `Signal.Deliver` enqueues one `Ready`. A worker can claim it once with `TryResume` to run the continuation. If `Deliver` returns `false`, the source keeps its value. [Typed completion example](example_await_test.go)
+
 ## Backoff — Adaptive Waiting for External I/O
 
 When `ErrWouldBlock` signals that no progress is possible, the caller must wait before retrying. `iox.Backoff` provides an adaptive back-off strategy for this waiting.

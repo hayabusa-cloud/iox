@@ -37,6 +37,10 @@
 // classifies as OutcomeWouldBlock and is not progress control. IsMore and
 // IsWouldBlock report sentinel membership, so both may be true for that error.
 //
+// A [Step] holds a terminal result from [Finish] or a pending wait from [Await].
+// A driver registers the wait with [Wait.Arm]. Once a signal is accepted,
+// a worker can claim the ready work with [Ready.TryResume] to run its continuation.
+//
 // These semantics propagate through Copy/CopyN and Tee helpers. CopyN,
 // CopyNBuffer, and their policy variants are bounded "copy exactly n bytes"
 // operations: once written == n, they return nil at that abstraction boundary.
