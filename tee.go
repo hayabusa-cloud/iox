@@ -154,11 +154,10 @@ func TeeWriter(primary Writer, tee Writer) Writer {
 	return teeWriter{w: primary, tee: tee}
 }
 
-// TeeWriterPolicy is like TeeWriter but consults policy on semantic errors.
-//
-//   - nil policy: identical to TeeWriter
-//   - non-nil: PolicyRetry yields and retries writing remaining bytes for either
-//     the primary or tee writes. Short writes are reported as io.ErrShortWrite.
+// TeeWriterPolicy is [TeeWriter] with a policy for exact semantic signals.
+// On [PolicyRetry] it yields and resumes the interrupted write with its
+// remaining bytes. An empty write reaches primary and can also be retried.
+// A nil policy uses TeeWriter.
 func TeeWriterPolicy(primary Writer, tee Writer, policy SemanticPolicy) Writer {
 	if policy == nil {
 		return TeeWriter(primary, tee)
@@ -201,7 +200,7 @@ func (t teeWriterWithPolicy) Write(p []byte) (int, error) {
 	// Primary write with retry per policy. As progress is accepted by primary,
 	// mirror the accepted prefix to tee.
 	off := 0
-	for off < len(p) {
+	for {
 		nw, ew := t.w.Write(p[off:])
 		if nw > 0 {
 			// Mirror the newly accepted bytes to tee.
@@ -236,27 +235,30 @@ func (t teeWriterWithPolicy) Write(p []byte) (int, error) {
 			off += nw
 		}
 		if ew != nil {
-			if ew == ErrWouldBlock {
-				if t.p.OnWouldBlock(OpTeeWriterPrimaryWrite) == PolicyRetry {
-					t.p.Yield(OpTeeWriterPrimaryWrite)
-					continue
+			switch ew {
+			case ErrWouldBlock:
+				if t.p.OnWouldBlock(OpTeeWriterPrimaryWrite) != PolicyRetry {
+					return off, ew
 				}
+			case ErrMore:
+				if t.p.OnMore(OpTeeWriterPrimaryWrite) != PolicyRetry {
+					return off, ew
+				}
+			default:
 				return off, ew
 			}
-			if ew == ErrMore {
-				if t.p.OnMore(OpTeeWriterPrimaryWrite) == PolicyRetry {
-					t.p.Yield(OpTeeWriterPrimaryWrite)
-					continue
-				}
-				return off, ew
+			t.p.Yield(OpTeeWriterPrimaryWrite)
+			if nw == 0 {
+				continue
 			}
-			return off, ew
+		}
+		if off == len(p) {
+			return off, nil
 		}
 		if nw == 0 {
 			return off, io.ErrShortWrite
 		}
 	}
-	return off, nil
 }
 
 // WriterToAdapter adapts a Reader to implement WriterTo using iox.Copy.

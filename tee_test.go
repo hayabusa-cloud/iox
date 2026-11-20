@@ -7,6 +7,7 @@ package iox_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"testing"
 
 	"code.hybscloud.com/iox"
@@ -96,6 +97,64 @@ func TestTeeWriter_Basic(t *testing.T) {
 		t.Fatalf("p=%q q=%q", p.String(), q.String())
 	}
 }
+
+func TestTeeWriterPolicyEmptyWriteClosedPipe(t *testing.T) {
+	r, primary := io.Pipe()
+	r.Close()
+	defer primary.Close()
+
+	w := iox.TeeWriterPolicy(primary, io.Discard, iox.ReturnPolicy{})
+	if n, err := w.Write(nil); n != 0 || err != io.ErrClosedPipe {
+		t.Fatalf("Write(nil) = (%d, %v), want (0, %v)", n, err, io.ErrClosedPipe)
+	}
+}
+
+type teeWriteFunc func([]byte) (int, error)
+
+func (f teeWriteFunc) Write(p []byte) (int, error) { return f(p) }
+
+func TestTeeWriterPolicyPrimaryRetryAtEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name, data              string
+		primaryCalls, sideCalls int
+	}{
+		{"Empty", "", 2, 0},
+		{"FinalByte", "x", 1, 1},
+	} {
+		for _, signal := range []error{iox.ErrWouldBlock, iox.ErrMore} {
+			t.Run(tc.name+"/"+signal.Error(), func(t *testing.T) {
+				primaryCalls, sideCalls := 0, 0
+				primary := teeWriteFunc(func(p []byte) (int, error) {
+					primaryCalls++
+					if primaryCalls > tc.primaryCalls || p == nil || string(p) != tc.data {
+						t.Fatalf("unexpected primary write #%d with %q", primaryCalls, p)
+					}
+					if primaryCalls == 1 {
+						return len(p), signal
+					}
+					return len(p), nil
+				})
+				side := teeWriteFunc(func(p []byte) (int, error) {
+					sideCalls++
+					if len(p) == 0 || string(p) != tc.data {
+						t.Fatalf("unexpected side write with %q", p)
+					}
+					return len(p), nil
+				})
+				retry := map[iox.Op]iox.PolicyAction{iox.OpTeeWriterPrimaryWrite: iox.PolicyRetry}
+				policy := &recPolicy{onWB: retry, onMore: retry}
+				n, err := iox.TeeWriterPolicy(primary, side, policy).Write([]byte(tc.data))
+				if n != len(tc.data) || err != nil || primaryCalls != tc.primaryCalls || sideCalls != tc.sideCalls {
+					t.Fatalf("Write = (%d, %v), primary calls %d, side calls %d", n, err, primaryCalls, sideCalls)
+				}
+				if len(policy.yields) != 1 || policy.yields[0] != iox.OpTeeWriterPrimaryWrite {
+					t.Fatalf("unexpected yields %v", policy.yields)
+				}
+			})
+		}
+	}
+}
+
 func TestTeeWriter_PrimaryShortWrite(t *testing.T) {
 	tw := iox.TeeWriter(shortWriter{limit: 2}, &bytes.Buffer{})
 	n, err := tw.Write([]byte("abcd"))
