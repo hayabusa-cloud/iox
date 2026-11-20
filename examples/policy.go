@@ -6,29 +6,18 @@ package examples
 
 import (
 	"bytes"
-	"runtime"
 
 	"code.hybscloud.com/iox"
 )
 
-// CopyWithPolicy shows how to specify a SemanticPolicy for Copy.
-//
-// In most cases you don't pass a policy (nil keeps the default non-blocking
-// behavior), but if you want the helper to yield/retry on ErrWouldBlock,
-// pass a policy that returns PolicyRetry and provides a Yield hook.
+// CopyWithPolicy uses [iox.YieldPolicy] to wait for readiness and retry
+// [iox.ErrWouldBlock] within a single copy.
 func CopyWithPolicy() (n int64, err error, out string) {
-	src := &wouldBlockReader{}
+	src, ready := wouldBlockSource()
 	var dst bytes.Buffer
 
-	policy := iox.PolicyFunc{
-		WouldBlockFunc: func(op iox.Op) iox.PolicyAction {
-			return iox.PolicyRetry
-		},
-		YieldFunc: func(op iox.Op) {
-			// In real code this could be "poll one tick", "wait for readiness",
-			// or any backpressure strategy. For a tiny example, just yield.
-			runtime.Gosched()
-		},
+	policy := iox.YieldPolicy{
+		YieldFunc: func(iox.Op) { <-ready },
 	}
 
 	n, err = iox.CopyPolicy(&dst, src, policy)

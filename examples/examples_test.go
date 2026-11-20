@@ -6,11 +6,39 @@ package examples_test
 
 import (
 	"errors"
+	"io"
 	"testing"
 
 	"code.hybscloud.com/iox"
 	ex "code.hybscloud.com/iox/examples"
 )
+
+func TestCompletionShortReads(t *testing.T) {
+	check := func(r io.Reader, size int, want string, wantErr error) {
+		t.Helper()
+		p := make([]byte, size)
+		n, err := r.Read(p)
+		if n != len(want) || err != wantErr {
+			t.Fatalf("Read(%d) = (%d, %v), want (%d, %v)", size, n, err, len(want), wantErr)
+		}
+		if got := string(p[:n]); got != want {
+			t.Fatalf("read %q, want %q", got, want)
+		}
+	}
+	for _, signal := range []error{iox.ErrMore, iox.ErrWouldBlock} {
+		r := ex.NewCompletion("abc", signal)
+		check(r, 0, "", nil)
+		check(r, 1, "a", nil)
+		check(r, 0, "", nil)
+		check(r, 4, "bc", signal)
+		check(r, 1, "", io.EOF)
+
+		empty := ex.NewCompletion("", signal)
+		check(empty, 0, "", nil)
+		check(empty, 1, "", signal)
+		check(empty, 1, "", io.EOF)
+	}
+}
 
 func TestCopyWithErrMore(t *testing.T) {
 	firstN, firstErr, secondN, secondErr, thirdN, thirdErr, out := ex.CopyWithErrMore()

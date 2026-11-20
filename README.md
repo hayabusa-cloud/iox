@@ -1,10 +1,11 @@
 # iox
 
-Non-blocking semantics for Go `io` package: first-class signals for would-block and multi-shot.
-
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/iox.svg)](https://pkg.go.dev/code.hybscloud.com/iox)
-[![codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
+[![Benchmarks](https://github.com/hayabusa-cloud/iox/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/hayabusa-cloud/iox/actions/workflows/benchmarks.yml)
+[![Codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+Non-blocking semantics for Go `io` package: first-class signals for would-block and multi-shot.
 
 Language: **English** | [简体中文](./README.zh-CN.md) | [Español](./README.es.md) | [日本語](./README.ja.md) | [Français](./README.fr.md)
 
@@ -62,7 +63,7 @@ This rollback guarantee applies to the generic read/write loop owned by `iox.Cop
 - Use seekable sources (e.g., `*os.File`, `*bytes.Reader`) when copying to non-blocking destinations.
 - For non-seekable sources (e.g., network sockets), use `CopyPolicy` with `PolicyRetry` for write-side semantic errors. This ensures all read bytes are written before returning, avoiding the need for rollback.
 
-## Quick start
+## Installation and example
 
 This module requires Go 1.27 or later.
 
@@ -70,42 +71,58 @@ This module requires Go 1.27 or later.
 go get code.hybscloud.com/iox
 ```
 
-```go
-type reader struct{ step int }
+The second `Copy` transfers `"world"` before the reader reports `ErrWouldBlock`. The caller consumes those five bytes with `CopyN`, then uses its `waitReadable` function to wait for the source to become readable again. [Readiness example](examples/wouldblock.go)
 
-func (r *reader) Read(p []byte) (int, error) {
-	switch r.step {
-	case 0:
-		r.step++
-		return copy(p, "hello"), iox.ErrMore
-	case 1:
-		r.step++
-		return copy(p, "world"), nil
-	case 2:
-		r.step++
-		return 0, iox.ErrWouldBlock
-	case 3:
-		r.step++
-		return copy(p, "iox"), nil
-	default:
-		return 0, io.EOF
-	}
+```go
+src := &reader{
+	{data: "hello", err: iox.ErrMore},
+	{data: "world"},
+	{err: iox.ErrWouldBlock},
+	{data: "iox"},
+}
+var dst bytes.Buffer
+
+n, err := iox.Copy(&dst, src)
+fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: expect more "hello"
+_, _ = iox.CopyN(io.Discard, &dst, n)
+
+if iox.IsMore(err) {
+	n, err = iox.Copy(&dst, src)
+	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: would block "world"
+	_, _ = iox.CopyN(io.Discard, &dst, n)
 }
 
-func main() {
-	src := &reader{}
-	var dst bytes.Buffer
-
-	n, err := iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=5  err=io: expect more  buf="hello"
-	_, _ = iox.CopyN(io.Discard, &dst, 5)                    // consume "hello"
-
+if iox.IsWouldBlock(err) {
+	waitReadable()
 	n, err = iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=5  err=io: would block   buf="world"
-	_, _ = iox.CopyN(io.Discard, &dst, 5)                    // consume "world"
+	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 3 <nil> "iox"
+}
+return err
+```
 
-	n, err = iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=3  err=<nil>            buf="iox"
+The reader keeps any bytes that do not fit in `p`. A zero-length read leaves the chunk untouched. The error is returned with the chunk’s last byte, or on its own for an empty chunk.
+
+```go
+type reader []struct {
+	data string
+	err  error
+}
+
+func (r *reader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if len(*r) == 0 {
+		return 0, io.EOF
+	}
+	chunk := &(*r)[0]
+	n := copy(p, chunk.data)
+	if n < len(chunk.data) {
+		chunk.data = chunk.data[n:]
+		return n, nil
+	}
+	*r = (*r)[1:]
+	return n, chunk.err
 }
 ```
 

@@ -1,10 +1,11 @@
 # iox
 
-Sémantique non bloquante pour le package Go `io` : signaux de premier ordre pour would-block et multi-shot.
-
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/iox.svg)](https://pkg.go.dev/code.hybscloud.com/iox)
-[![codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
+[![Benchmarks](https://github.com/hayabusa-cloud/iox/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/hayabusa-cloud/iox/actions/workflows/benchmarks.yml)
+[![Codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+Sémantique non bloquante pour le package Go `io` : signaux de premier ordre pour would-block et multi-shot.
 
 Langue : [English](./README.md) | [简体中文](./README.zh-CN.md) | [Español](./README.es.md) | [日本語](./README.ja.md) | **Français**
 
@@ -64,7 +65,7 @@ Cette garantie de retour arrière s'applique à la boucle générique lecture/é
 - Utilisez des sources repositionnables (p. ex., `*os.File`, `*bytes.Reader`) lors de la copie vers des destinations non bloquantes.
 - Pour les sources non repositionnables (p. ex., sockets réseau), utilisez `CopyPolicy` avec `PolicyRetry` pour les erreurs sémantiques côté écriture. Cela garantit que tous les octets lus sont écrits avant le retour, évitant le besoin de retour arrière.
 
-## Démarrage rapide
+## Installation et exemple
 
 Ce module nécessite Go 1.27 ou une version ultérieure.
 
@@ -72,42 +73,58 @@ Ce module nécessite Go 1.27 ou une version ultérieure.
 go get code.hybscloud.com/iox
 ```
 
-```go
-type reader struct{ step int }
+Le deuxième appel à `Copy` transfère `"world"` avant que le lecteur renvoie `ErrWouldBlock`. L’appelant consomme ces cinq octets avec `CopyN`, puis utilise sa fonction `waitReadable` pour attendre que la lecture puisse reprendre. [Exemple d’attente](examples/wouldblock.go)
 
-func (r *reader) Read(p []byte) (int, error) {
-	switch r.step {
-	case 0:
-		r.step++
-		return copy(p, "hello"), iox.ErrMore
-	case 1:
-		r.step++
-		return copy(p, "world"), nil
-	case 2:
-		r.step++
-		return 0, iox.ErrWouldBlock
-	case 3:
-		r.step++
-		return copy(p, "iox"), nil
-	default:
-		return 0, io.EOF
-	}
+```go
+src := &reader{
+	{data: "hello", err: iox.ErrMore},
+	{data: "world"},
+	{err: iox.ErrWouldBlock},
+	{data: "iox"},
+}
+var dst bytes.Buffer
+
+n, err := iox.Copy(&dst, src)
+fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: expect more "hello"
+_, _ = iox.CopyN(io.Discard, &dst, n)
+
+if iox.IsMore(err) {
+	n, err = iox.Copy(&dst, src)
+	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: would block "world"
+	_, _ = iox.CopyN(io.Discard, &dst, n)
 }
 
-func main() {
-	src := &reader{}
-	var dst bytes.Buffer
-
-	n, err := iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=5  err=io: expect more  buf="hello"
-	_, _ = iox.CopyN(io.Discard, &dst, 5)                    // consomme "hello"
-
+if iox.IsWouldBlock(err) {
+	waitReadable()
 	n, err = iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=5  err=io: would block   buf="world"
-	_, _ = iox.CopyN(io.Discard, &dst, 5)                    // consomme "world"
+	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 3 <nil> "iox"
+}
+return err
+```
 
-	n, err = iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=3  err=<nil>            buf="iox"
+Le lecteur conserve les octets qui ne tiennent pas dans `p`. Une lecture de longueur nulle laisse le bloc intact. Il renvoie l’erreur avec le dernier octet du bloc, ou seule si le bloc est vide.
+
+```go
+type reader []struct {
+	data string
+	err  error
+}
+
+func (r *reader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if len(*r) == 0 {
+		return 0, io.EOF
+	}
+	chunk := &(*r)[0]
+	n := copy(p, chunk.data)
+	if n < len(chunk.data) {
+		chunk.data = chunk.data[n:]
+		return n, nil
+	}
+	*r = (*r)[1:]
+	return n, chunk.err
 }
 ```
 

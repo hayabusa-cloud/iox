@@ -1,10 +1,11 @@
 # iox
 
-为 Go `io` 包提供非阻塞语义：把“会阻塞（would-block）”与“多次完成（multi-shot）”作为一等控制信号。
-
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/iox.svg)](https://pkg.go.dev/code.hybscloud.com/iox)
-[![codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
+[![Benchmarks](https://github.com/hayabusa-cloud/iox/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/hayabusa-cloud/iox/actions/workflows/benchmarks.yml)
+[![Codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+为 Go `io` 包提供非阻塞语义：把“会阻塞（would-block）”与“多次完成（multi-shot）”作为一等控制信号。
 
 语言： [English](./README.md) | **简体中文** | [Español](./README.es.md) | [日本語](./README.ja.md) | [Français](./README.fr.md)
 
@@ -62,7 +63,7 @@ Go 的 `io.Reader` 契约允许 `Read` 返回 `(0, nil)` 来表示“没有进�
 - 向非阻塞目标复制时，使用可寻址的源（如 `*os.File`、`*bytes.Reader`）。
 - 对于不可寻址的源（如网络套接字），使用 `CopyPolicy` 并为写入端语义错误配置 `PolicyRetry`。这可确保所有已读字节在返回前被写入，从而避免回滚需求。
 
-## 快速开始
+## 安装与示例
 
 此模块要求使用 Go 1.27 或更高版本。
 
@@ -70,42 +71,58 @@ Go 的 `io.Reader` 契约允许 `Read` 返回 `(0, nil)` 来表示“没有进�
 go get code.hybscloud.com/iox
 ```
 
-```go
-type reader struct{ step int }
+第二次调用 `Copy` 时，先传输了 `"world"`，随后读取器才返回 `ErrWouldBlock`。调用方用 `CopyN` 取走这五个字节，再调用自己提供的 `waitReadable` 等待数据源重新可读。[等待就绪的示例](examples/wouldblock.go)
 
-func (r *reader) Read(p []byte) (int, error) {
-	switch r.step {
-	case 0:
-		r.step++
-		return copy(p, "hello"), iox.ErrMore
-	case 1:
-		r.step++
-		return copy(p, "world"), nil
-	case 2:
-		r.step++
-		return 0, iox.ErrWouldBlock
-	case 3:
-		r.step++
-		return copy(p, "iox"), nil
-	default:
-		return 0, io.EOF
-	}
+```go
+src := &reader{
+	{data: "hello", err: iox.ErrMore},
+	{data: "world"},
+	{err: iox.ErrWouldBlock},
+	{data: "iox"},
+}
+var dst bytes.Buffer
+
+n, err := iox.Copy(&dst, src)
+fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: expect more "hello"
+_, _ = iox.CopyN(io.Discard, &dst, n)
+
+if iox.IsMore(err) {
+	n, err = iox.Copy(&dst, src)
+	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: would block "world"
+	_, _ = iox.CopyN(io.Discard, &dst, n)
 }
 
-func main() {
-	src := &reader{}
-	var dst bytes.Buffer
-
-	n, err := iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=5  err=io: expect more  buf="hello"
-	_, _ = iox.CopyN(io.Discard, &dst, 5)                    // 消费 "hello"
-
+if iox.IsWouldBlock(err) {
+	waitReadable()
 	n, err = iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=5  err=io: would block   buf="world"
-	_, _ = iox.CopyN(io.Discard, &dst, 5)                    // 消费 "world"
+	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 3 <nil> "iox"
+}
+return err
+```
 
-	n, err = iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=3  err=<nil>            buf="iox"
+读取器会将 `p` 放不下的字节留到下次读取。传入长度为零的缓冲区时，读取位置不变。每个数据块的错误随最后一个字节一起返回，空块则单独返回错误。
+
+```go
+type reader []struct {
+	data string
+	err  error
+}
+
+func (r *reader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if len(*r) == 0 {
+		return 0, io.EOF
+	}
+	chunk := &(*r)[0]
+	n := copy(p, chunk.data)
+	if n < len(chunk.data) {
+		chunk.data = chunk.data[n:]
+		return n, nil
+	}
+	*r = (*r)[1:]
+	return n, chunk.err
 }
 ```
 
