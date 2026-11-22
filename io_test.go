@@ -44,13 +44,14 @@ func (s *scriptedReader) Read(p []byte) (int, error) {
 	if s.i >= len(s.steps) {
 		return 0, iox.EOF
 	}
-	st := s.steps[s.i]
-	s.i++
-	if len(st.b) > 0 {
-		n := copy(p, st.b)
+	st := &s.steps[s.i]
+	n := copy(p, st.b)
+	if n < len(st.b) {
+		st.b = st.b[n:]
 		return n, nil
 	}
-	return 0, st.err
+	s.i++
+	return n, st.err
 }
 
 type shortWriter struct{ limit int }

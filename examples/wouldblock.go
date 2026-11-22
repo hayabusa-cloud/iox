@@ -10,33 +10,21 @@ import (
 	"code.hybscloud.com/iox"
 )
 
-// wouldBlockReader simulates a non-blocking source that is not ready on the
-// first attempt, then becomes ready on a subsequent poll.
-type wouldBlockReader struct{ step int }
-
-func (r *wouldBlockReader) Read(p []byte) (int, error) {
-	switch r.step {
-	case 0:
-		r.step++
-		// No progress is possible now without waiting.
-		return 0, iox.ErrWouldBlock
-	case 1:
-		r.step++
-		copy(p, []byte("ok"))
-		return 2, nil
-	default:
-		return 0, iox.EOF
-	}
+// The script queues one readiness notification for the retry that reads "ok".
+func wouldBlockSource() (*completions, <-chan struct{}) {
+	ready := make(chan struct{}, 1)
+	ready <- struct{}{}
+	return &completions{{err: iox.ErrWouldBlock}, {data: "ok"}}, ready
 }
 
-// CopyWithWouldBlock demonstrates that ErrWouldBlock means "stop now and retry
-// after readiness". The first copy returns (0, ErrWouldBlock); the second copy
-// makes progress and completes.
+// CopyWithWouldBlock receives a readiness notification after the first copy
+// returns (0, [iox.ErrWouldBlock]). The second copy transfers "ok".
 func CopyWithWouldBlock() (firstN int64, firstErr error, secondN int64, secondErr error, out string) {
-	src := &wouldBlockReader{}
+	src, ready := wouldBlockSource()
 	var dst bytes.Buffer
 
 	firstN, firstErr = iox.Copy(&dst, src)
+	<-ready
 	secondN, secondErr = iox.Copy(&dst, src)
 
 	return firstN, firstErr, secondN, secondErr, dst.String()

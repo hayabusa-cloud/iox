@@ -6,10 +6,9 @@ package iox
 
 import "runtime"
 
-// Op identifies where a semantic signal (ErrWouldBlock / ErrMore) came from.
-//
-// This is intentionally coarse-grained: it lets a Policy distinguish reader-side
-// vs writer-side semantics (e.g., writer-side ErrMore as a frame boundary).
+// Op identifies the call that reported a semantic signal. Direct reads and
+// writes have distinct values. [OpCopyWriterTo] and [OpCopyReaderFrom]
+// identify a delegated method whose signal can come from either side.
 type Op uint8
 
 const (
@@ -54,27 +53,19 @@ func (op Op) String() string {
 type PolicyAction uint8
 
 const (
-	// PolicyReturn means: return immediately to the caller.
-	// Use this for "delivery boundaries" (e.g., writer-side ErrMore).
+	// PolicyReturn tells the helper to return control to the caller.
 	PolicyReturn PolicyAction = iota
 
-	// PolicyRetry means: do not return; retry after waiting/yielding.
-	// This is typically used to map ErrWouldBlock to blocking-ish behavior.
+	// PolicyRetry tells the helper to call Yield before continuing.
 	PolicyRetry
 )
 
-// SemanticPolicy customizes how an engine reacts to iox semantic errors.
+// SemanticPolicy selects an action for an exact [ErrWouldBlock] or [ErrMore].
+// [PolicyRetry] invokes Yield before the helper resumes. Yield can wait for
+// readiness. Repeated retries without a readiness wait can spin.
 //
-// This is a decision function that maps (operation, error) pairs to actions,
-// plus an optional yield hook for when retry is selected.
-//
-// Contract expectations:
-//   - OnWouldBlock / OnMore are only called for the matching semantic errors.
-//   - If PolicyRetry is returned, the engine will call Yield(op) and then retry.
-//   - If Yield(op) does not actually wait for readiness/completion, the engine
-//     may spin.
-//
-// Note: keep this interface narrow; it should remain usable for both Copy and Tee.
+// A bounded copy skips the policy once its byte count is complete.
+// [TeeReaderPolicy] can yield and return data already read to its caller.
 type SemanticPolicy interface {
 	Yield(op Op)
 	OnWouldBlock(op Op) PolicyAction
@@ -153,11 +144,10 @@ func (YieldPolicy) OnWouldBlock(Op) PolicyAction { return PolicyRetry }
 
 func (YieldPolicy) OnMore(Op) PolicyAction { return PolicyReturn }
 
-// YieldOnWriteWouldBlockPolicy retries only when the *writer side* would block.
-// Reader-side ErrWouldBlock is returned to the caller.
-//
-// Useful when reads are fed by an event loop already, but writes need a local
-// backpressure strategy (e.g., bounded output buffer).
+// YieldOnWriteWouldBlockPolicy retries [ErrWouldBlock] from writes and from
+// delegated [WriterTo] and [ReaderFrom] calls. Those methods report one
+// aggregate error, which can originate on either side of the transfer.
+// Direct reads and [ErrMore] return control to the caller.
 type YieldOnWriteWouldBlockPolicy struct {
 	YieldFunc func(op Op)
 }

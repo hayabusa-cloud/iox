@@ -8,20 +8,18 @@ import (
 	"errors"
 )
 
-// Outcome classifies an operation result based on iox's extended semantics.
-// Its numeric encoding is defensive, not an ordering; use switches, Classify,
-// and predicate helpers instead of numeric comparison.
-//
-// OutcomeOK:            success, no more to come.
-// OutcomeWouldBlock:    no progress is possible right now; retry later.
-// OutcomeMore:          progress happened and more completions are expected.
-// OutcomeFailure:       any other error (including EOF when it's not absorbed by helpers).
+// Outcome classifies the error returned by an I/O operation. Treat the
+// constants as unordered labels in a switch. The byte count reports progress.
 type Outcome uint8
 
 const (
+	// OutcomeFailure denotes an error other than a semantic signal.
 	OutcomeFailure Outcome = iota
+	// OutcomeOK denotes a nil error.
 	OutcomeOK
+	// OutcomeWouldBlock means further progress requires readiness.
 	OutcomeWouldBlock
+	// OutcomeMore means the operation remains active.
 	OutcomeMore
 )
 
@@ -61,18 +59,14 @@ func IsNonFailure(err error) bool { return err == nil || IsSemantic(err) }
 // semantic control signal.
 func IsFailure(err error) bool { return err != nil && !IsSemantic(err) }
 
-// IsProgress reports whether the current call produced usable progress now:
-// returns true for nil and ErrMore. In both cases caller can proceed with
-// delivered data/work; for ErrMore keep polling for subsequent completions.
-func IsProgress(err error) bool { return err == nil || IsMore(err) }
+// IsProgress reports whether [Classify] selects [OutcomeOK] or [OutcomeMore].
+// Use the returned byte count to determine how much data moved.
+func IsProgress(err error) bool { return err == nil || Classify(err) == OutcomeMore }
 
-// Classify maps err to an Outcome. Use when a compact switch is preferred.
-//
-// Classify accepts wrapped semantic sentinels through errors.Is. Internal
-// hot-path engines may still require exact sentinel identity for policy dispatch.
-//
-// Note: This does not attempt to reinterpret standard library sentinels like
-// io.EOF; classification depends solely on the error value the caller passes.
+// Classify returns [OutcomeOK] for nil, [OutcomeWouldBlock] for errors
+// matching [ErrWouldBlock], [OutcomeMore] for errors matching [ErrMore], and
+// [OutcomeFailure] otherwise. [ErrWouldBlock] takes precedence if both match.
+// Classify treats [EOF] as [OutcomeFailure]. Copy helpers handle EOF separately.
 func Classify(err error) Outcome {
 	if err == nil {
 		return OutcomeOK

@@ -6,34 +6,17 @@ package iox
 
 import "errors"
 
-// iox introduces two semantic errors for non-blocking and multi-shot I/O.
-//
-// Mental model:
-//   - ErrWouldBlock: retry later (wait for readiness/event, then try again).
-//   - ErrMore: keep polling (operation remains active; more completions will follow).
-//
-// Notes:
-//   - ErrWouldBlock and ErrMore are expected control flow; treat them like
-//     readiness/completion states, not failures.
-//   - Either may help partial progress: counts first, semantics second.
-
-// ErrWouldBlock means “no further progress without waiting”.
-// Linux analogy: EAGAIN/EWOULDBLOCK / not-ready / no completion available.
-// Next step: wait (via poll/epoll/io_uring/etc), then retry.
+// ErrWouldBlock signals that further progress requires readiness.
+// Process any bytes already transferred before waiting to retry.
 var ErrWouldBlock = errors.New("io: would block")
 
-// ErrMore means “this operation remains active; more completions will follow”
-// (multi-shot / streaming style).
-// Next step: keep polling and processing results.
+// ErrMore signals that the operation remains active. Process any bytes
+// already transferred and continue observing the operation.
 var ErrMore = errors.New("io: expect more")
 
-// ErrNoSeeker is returned by Copy helpers when a partial write occurs with a
-// semantic error (ErrWouldBlock or ErrMore) and the source does not implement
-// io.Seeker. Without Seek capability, the unwritten bytes in the transient
-// buffer cannot be recovered, resulting in data loss.
-//
-// To avoid this error:
-//   - Use a seekable source (e.g., *os.File, *bytes.Reader).
-//   - Use CopyPolicy with PolicyRetry to ensure all read bytes are written
-//     before returning.
+// ErrNoSeeker means the generic copy loop could not rewind a non-seekable
+// source after a partial write with a semantic error. The source has already
+// advanced past the unwritten bytes. To keep the suffix on a non-seekable
+// source, use [CopyPolicy] from the start and select [PolicyRetry] when the
+// write returns an exact [ErrWouldBlock] or [ErrMore].
 var ErrNoSeeker = errors.New("io: source is not seekable; partial write unrecoverable")

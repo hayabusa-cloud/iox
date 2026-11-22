@@ -23,7 +23,7 @@ type devNull struct{}
 
 func (devNull) Write(p []byte) (int, error) { return len(p), nil }
 
-// benchReader is a Reader-only source for generic read/write path benchmarks.
+// benchReader exposes only Read so the source cannot select the WriterTo path.
 type benchReader struct {
 	data []byte
 	off  int
@@ -52,15 +52,16 @@ func (r benchWT) WriteTo(w iox.Writer) (int64, error) {
 }
 
 // benchRF is a Writer that implements ReaderFrom by pulling from r.
-type benchRF struct{}
+type benchRF struct{ buf iox.Buffer }
 
-func (benchRF) Write(p []byte) (int, error) { return len(p), nil }
+func (*benchRF) Write([]byte) (int, error) {
+	return 0, errors.New("ReaderFrom benchmark called Write")
+}
 
-func (benchRF) ReadFrom(r iox.Reader) (int64, error) {
+func (w *benchRF) ReadFrom(r iox.Reader) (int64, error) {
 	var n int64
-	buf := make([]byte, 32*1024)
 	for {
-		nr, er := r.Read(buf)
+		nr, er := r.Read(w.buf[:])
 		if nr > 0 {
 			n += int64(nr)
 		}
@@ -128,6 +129,37 @@ func BenchmarkCopyBuffer_SlowPath(b *testing.B) {
 	}
 }
 
+// BenchmarkCopyBufferReuse excludes endpoint and scratch construction and
+// compares generic paths on ordinary EOF-terminated input.
+func BenchmarkCopyBufferReuse(b *testing.B) {
+	for _, variant := range []struct {
+		name string
+		copy func(io.Writer, io.Reader, []byte) (int64, error)
+	}{
+		{"iox", iox.CopyBuffer},
+		{"ioxPolicy", func(w io.Writer, r io.Reader, buf []byte) (int64, error) {
+			return iox.CopyBufferPolicy(w, r, buf, iox.ReturnPolicy{})
+		}},
+		{"io", io.CopyBuffer},
+	} {
+		for _, size := range []int{1 << 10, 32 << 10, 1 << 20} {
+			b.Run(variant.name+"/"+byteSize(size), func(b *testing.B) {
+				src := &benchReader{data: bytes.Repeat([]byte{'x'}, size)}
+				buf := make([]byte, 32*1024)
+				b.SetBytes(int64(size))
+				b.ReportAllocs()
+				for b.Loop() {
+					src.off = 0
+					n, err := variant.copy(devNull{}, src, buf)
+					if n != int64(size) || err != nil {
+						b.Fatalf("copy = (%d, %v), want (%d, nil)", n, err, size)
+					}
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkCopy_WriterTo(b *testing.B) {
 	sizes := []int{1 << 10, 32 << 10, 1 << 20}
 	for _, size := range sizes {
@@ -150,14 +182,15 @@ func BenchmarkCopy_ReaderFrom(b *testing.B) {
 	sizes := []int{1 << 10, 32 << 10, 1 << 20}
 	for _, size := range sizes {
 		b.Run(byteSize(size), func(b *testing.B) {
-			data := bytes.Repeat([]byte{'x'}, size)
+			src := &benchReader{data: bytes.Repeat([]byte{'x'}, size)}
+			var dst benchRF
 			b.SetBytes(int64(size))
 			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				src := bytes.NewReader(data)
-				_, err := iox.Copy(benchRF{}, src)
-				if err != nil {
-					b.Fatal(err)
+			for b.Loop() {
+				src.off = 0
+				n, err := iox.Copy(&dst, src)
+				if err != nil || n != int64(size) {
+					b.Fatalf("copy = (%d, %v), want (%d, nil)", n, err, size)
 				}
 			}
 		})

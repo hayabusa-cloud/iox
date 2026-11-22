@@ -2,14 +2,6 @@
 // Use of this source code is governed by a MIT-style
 // license that can be found in the LICENSE file.
 
-// Package iox provides non-blocking I/O helpers that extend Go's standard io
-// semantics with explicit non-failure control-flow errors (see ErrWouldBlock,
-// ErrMore) while remaining compatible with standard library interfaces.
-//
-// IDE note: iox re-exports (aliases) the core io interfaces so that users can
-// stay in the "iox" namespace while reading documentation and navigating types.
-// The contracts below mirror the standard io expectations, with iox-specific
-// behavior documented where relevant (typically at call sites such as Copy).
 package iox
 
 import (
@@ -31,19 +23,14 @@ type Reader = io.Reader
 
 // Writer is implemented by types that can write bytes from p.
 //
-// Write must return the number of bytes written (0 <= n <= len(p)) and any
-// error encountered. If Write returns n < len(p), it must return a non-nil error
-// (except in the special case of len(p) == 0).
+// Write returns the number of bytes accepted (0 <= n <= len(p)) and any
+// error encountered. A short write (n < len(p)) must return a non-nil error.
 //
 // Writer is an alias of io.Writer.
 type Writer = io.Writer
 
-// Closer is implemented by types that can release resources.
-//
-// Close should be idempotent where practical; callers should not assume any
-// particular behavior beyond resource release and an error indicating failure.
-//
-// Closer is an alias of io.Closer.
+// Closer is an alias of [io.Closer]. The behavior of repeated calls to
+// Close is unspecified unless the implementation documents it.
 type Closer = io.Closer
 
 // Seeker is implemented by types that can set the offset for the next Read or

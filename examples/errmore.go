@@ -2,73 +2,61 @@
 // Use of this source code is governed by a MIT-style
 // license that can be found in the LICENSE file.
 
-// Package examples contains small, runnable snippets that demonstrate
-// how to use iox's non-blocking semantics in typical copy-style flows.
+// Package examples demonstrates how copies report data, readiness, and
+// multi-shot completions.
 package examples
 
 import (
-	"bytes"
+	"io"
+	"strings"
 
 	"code.hybscloud.com/iox"
 )
 
-// multiShotReader simulates a source that produces multiple completions
-// for a single logical operation. It returns ErrMore to signal that the
-// operation remains active and more data will follow on subsequent polls.
-type multiShotReader struct{ step int }
-
-func (r *multiShotReader) Read(p []byte) (int, error) {
-	switch r.step {
-	case 0:
-		r.step++
-		// First completion: we made progress (wrote 2 bytes) and
-		// explicitly signal multi-shot with ErrMore. Caller must keep
-		// the operation active and retry after the next poll.
-		copy(p, []byte("ab"))
-		return 2, iox.ErrMore
-	case 1:
-		r.step++
-		// Second completion: again progress + ErrMore. This indicates the
-		// logical operation is still ongoing; more completions will follow.
-		copy(p, []byte("cd"))
-		return 2, iox.ErrMore
-	case 2:
-		r.step++
-		// Final completion for this logical operation. We return progress
-		// and nil to indicate successful completion.
-		copy(p, []byte("ef"))
-		return 2, nil
-	default:
-		return 0, iox.EOF
-	}
+// Each completion delivers its error with its last byte. An empty
+// completion can deliver a signal on its own.
+type completions []struct {
+	data string
+	err  error
 }
 
-// CopyWithErrMore demonstrates handling of ErrMore across repeated calls.
-//
-// Contract for this scripted source:
-//   - First attempt: progress + ErrMore (more completions will follow).
-//   - Second attempt: progress + ErrMore (still ongoing).
-//   - Third attempt: progress + nil (final completion of the logical op).
-//
-// Caller must treat ErrMore as: "process this completion and keep the
-// operation active; retry after the next poll/CQE".
+func (r *completions) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if len(*r) == 0 {
+		return 0, io.EOF
+	}
+	c := &(*r)[0]
+	n := copy(p, c.data)
+	if n < len(c.data) {
+		c.data = c.data[n:]
+		return n, nil
+	}
+	*r = (*r)[1:]
+	return n, c.err
+}
+
+// CopyWithErrMore reads three queued chunks through a one-byte copy buffer.
+// The first two copies each return two bytes and [iox.ErrMore]. The third
+// reaches the end of the input.
 func CopyWithErrMore() (
 	firstN int64, firstErr error,
 	secondN int64, secondErr error,
 	thirdN int64, thirdErr error,
 	out string,
 ) {
-	src := &multiShotReader{}
-	var dst bytes.Buffer
+	src := &completions{
+		{data: "ab", err: iox.ErrMore},
+		{data: "cd", err: iox.ErrMore},
+		{data: "ef"},
+	}
+	var dst strings.Builder
+	var buf [1]byte
 
-	// First call: expect progress + ErrMore.
-	firstN, firstErr = iox.Copy(&dst, src)
-
-	// Second call: continue and still expect ErrMore.
-	secondN, secondErr = iox.Copy(&dst, src)
-
-	// Third call: continue and expect completion with nil error.
-	thirdN, thirdErr = iox.Copy(&dst, src)
+	firstN, firstErr = iox.CopyBuffer(&dst, src, buf[:])
+	secondN, secondErr = iox.CopyBuffer(&dst, src, buf[:])
+	thirdN, thirdErr = iox.CopyBuffer(&dst, src, buf[:])
 
 	return firstN, firstErr, secondN, secondErr, thirdN, thirdErr, dst.String()
 }

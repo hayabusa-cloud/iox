@@ -5,32 +5,26 @@
 package iox
 
 import (
+	"math"
+	"math/bits"
 	"time"
 )
 
 const (
-	// DefaultBackoffBase is the tuned base duration for backoff (500µs).
-	// It matches the expected scale of local-network round-trip times.
+	// DefaultBackoffBase is the initial sleep duration before jitter.
 	DefaultBackoffBase = 500 * time.Microsecond
 
-	// DefaultBackoffMax is the default ceiling for sleep duration (100ms).
+	// DefaultBackoffMax is the default duration cap before jitter (100ms).
 	DefaultBackoffMax = 100 * time.Millisecond
 )
 
-// Backoff implements a linear block-based back-off strategy with jitter.
-// It is designed for external I/O readiness waiting (e.g., buffer release).
+// Backoff spaces retry attempts when progress depends on external I/O.
+// Its zero value uses [DefaultBackoffBase] and [DefaultBackoffMax].
+// Use one Backoff per retry loop, or synchronize access to a shared Backoff.
 //
-// Zero-value is ready to use: a freshly declared Backoff{} uses
-// DefaultBackoffBase (500µs) and DefaultBackoffMax (100ms).
-//
-// This is the "Adapt" layer of the Three-Tier Progress model:
-//  1. Strike: System call → Direct kernel hit.
-//  2. Spin: Hardware yield (spin) → Local atomic synchronization.
-//  3. Adapt: Software backoff (iox.Backoff) → External I/O readiness.
-//
-// The algorithm groups iterations into blocks. In block n, it performs n
-// sleeps of duration (base × n). Jitter (±12.5%) is applied to prevent
-// synchronized thundering herds.
+// Block n supplies n intervals of min(n × base, max) with up to 12.5% jitter.
+// [Backoff.Wait] and [Backoff.NextDelay] each consume one interval.
+// Call [Backoff.Reset] after progress to start again at block 1.
 type Backoff struct {
 	n       int           // block counter (1-indexed)
 	i       int           // iteration within current block
@@ -39,9 +33,15 @@ type Backoff struct {
 	fastSrc uint64        // PRNG state for jitter
 }
 
-// Wait performs a non-blocking-friendly sleep.
-// The duration scales linearly: min(base * n, max) ± 12.5% jitter.
+// Wait sleeps the calling goroutine for one interval from [Backoff.NextDelay].
 func (b *Backoff) Wait() {
+	time.Sleep(b.NextDelay())
+}
+
+// NextDelay returns the next jittered interval and advances the schedule
+// without sleeping. A caller can use the interval to arm a retry timer.
+// The cap applies before jitter. The result saturates at the largest [time.Duration].
+func (b *Backoff) NextDelay() time.Duration {
 	if b.n == 0 {
 		b.n = 1
 		if b.base <= 0 {
@@ -55,37 +55,49 @@ func (b *Backoff) Wait() {
 		}
 	}
 
-	// Linear duration: base * n
-	d := min(time.Duration(b.n)*b.base, b.max)
-
-	time.Sleep(b.applyJitter(d))
+	delay := b.applyJitter(cappedDuration(b.n, b.base, b.max))
 
 	b.i++
 	if b.i >= b.n {
 		b.i = 0
 		b.n++
 	}
+	return delay
+}
+
+func cappedDuration(block int, base, limit time.Duration) time.Duration {
+	hi, lo := bits.Mul64(uint64(block), uint64(base))
+	if hi != 0 {
+		// The product exceeds every representable duration cap.
+		return limit
+	}
+	return time.Duration(min(lo, uint64(limit)))
 }
 
 func (b *Backoff) applyJitter(d time.Duration) time.Duration {
 	b.fastSrc ^= b.fastSrc << 13
 	b.fastSrc ^= b.fastSrc >> 7
 	b.fastSrc ^= b.fastSrc << 17
-	r := int64(b.fastSrc>>32) % 256
-	factor := int64(d) * (r - 128) / 1024
-	return d + time.Duration(factor)
+	rate := int64(uint8(b.fastSrc>>32)) - 128
+	ns := int64(d)
+	// Split the nominal delay before multiplication. Only the remainder
+	// needs rounding toward zero, including for negative jitter.
+	offset := (ns>>10)*rate + (ns&1023)*rate/1024
+	return d + time.Duration(min(offset, math.MaxInt64-ns))
 }
 
 // SetBase configures the initial duration and linear scaling factor.
+// d must be positive. The current block is preserved.
 func (b *Backoff) SetBase(d time.Duration) { b.base = d }
 
-// SetMax configures the maximum allowed sleep duration.
+// SetMax configures the duration cap before jitter.
+// d must be positive. The current block is preserved.
 func (b *Backoff) SetMax(d time.Duration) { b.max = d }
 
-// Reset restores the backoff state to block 1.
+// Reset restarts the block schedule and preserves the configured base and cap.
 func (b *Backoff) Reset() { b.n = 0; b.i = 0 }
 
-// Block returns the current progression tier.
+// Block returns the current block number, starting at 1.
 func (b *Backoff) Block() int {
 	if b.n == 0 {
 		return 1
@@ -93,8 +105,8 @@ func (b *Backoff) Block() int {
 	return b.n
 }
 
-// Duration returns the current duration without jitter.
-// For a zero-value Backoff, returns DefaultBackoffBase.
+// Duration reports the current block's interval before jitter without advancing
+// the schedule. For a zero-value Backoff it returns [DefaultBackoffBase].
 func (b *Backoff) Duration() time.Duration {
 	n := b.n
 	if n == 0 {
@@ -104,10 +116,9 @@ func (b *Backoff) Duration() time.Duration {
 	if base <= 0 {
 		base = DefaultBackoffBase
 	}
-	d := time.Duration(n) * base
 	max := b.max
 	if max <= 0 {
 		max = DefaultBackoffMax
 	}
-	return min(d, max)
+	return cappedDuration(n, base, max)
 }

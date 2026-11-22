@@ -6,28 +6,18 @@ package iox
 
 import "io"
 
-// TeeReader returns a Reader that writes to w what it reads from r.
-// It mirrors io.TeeReader but propagates iox semantics:
-//   - If r.Read returns data with ErrWouldBlock or ErrMore, the data is first
-//     written to w, then the special error is returned unchanged.
-//   - If writing to w fails, that error is returned.
-//   - Short writes to w are reported as io.ErrShortWrite.
-//
-// Count semantics:
-//   - The returned n is the number of bytes read from r.
-//   - If the side write fails or is short, n is still the read count.
-//     This avoids byte loss: the bytes were already consumed from r.
+// TeeReader returns a [Reader] that mirrors bytes read from r to w. Read
+// returns the count from r, even if w accepts fewer bytes. A side-write
+// error takes precedence over the read error. A short side write with nil
+// error returns [ErrShortWrite].
 func TeeReader(r Reader, w Writer) Reader {
 	return teeReader{r: r, w: w}
 }
 
-// TeeReaderPolicy is like TeeReader but consults policy when encountering
-// semantic errors from r.Read or the side write to w.
-//
-//   - nil policy: identical to TeeReader
-//   - non-nil: PolicyRetry triggers policy.Yield(op) and a retry. For read-side
-//     semantics when n>0, the bytes are delivered to the caller after side write,
-//     and a retry decision of PolicyRetry results in returning (n, nil).
+// TeeReaderPolicy is [TeeReader] with a policy for exact semantic signals.
+// A nil policy uses TeeReader. On [PolicyRetry], a side write resumes with
+// its unwritten suffix. For a read signal, the helper yields and returns
+// (n, nil) if it has data to deliver, or retries the read if n is zero.
 func TeeReaderPolicy(r Reader, w Writer, policy SemanticPolicy) Reader {
 	if policy == nil {
 		return TeeReader(r, w)
@@ -133,32 +123,21 @@ func (t teeReaderWithPolicy) Read(p []byte) (int, error) {
 	}
 }
 
-// TeeWriter returns a Writer that writes to primary and also mirrors the bytes
-// accepted by primary to tee.
+// TeeWriter returns a [Writer] that writes to primary, then mirrors the
+// accepted prefix to tee. Write returns the primary count even if the mirror
+// fails. A short write with nil error counts as [ErrShortWrite]. A mirror
+// error takes precedence over the primary result.
 //
-// Call order and error precedence:
-//   - First, it calls primary.Write(p).
-//   - If primary accepts n>0 bytes, it then calls tee.Write(p[:n]).
-//   - If the tee write fails or is short, that error (or io.ErrShortWrite) is
-//     returned, even if primary also returned an error.
-//   - Otherwise, the primary error (if any) is returned.
-//
-// Special errors ErrWouldBlock and ErrMore are propagated unchanged.
-//
-// Count semantics:
-//   - The returned n is the number of bytes accepted by the primary writer.
-//   - If the tee write fails after primary has accepted bytes, n is still the
-//     primary count. This makes retry-by-slicing (p[n:]) safe: it will not
-//     duplicate primary writes.
+// Resume at p[n:] to avoid duplicating primary writes. Any missing bytes
+// from the mirrored prefix need separate recovery.
 func TeeWriter(primary Writer, tee Writer) Writer {
 	return teeWriter{w: primary, tee: tee}
 }
 
-// TeeWriterPolicy is like TeeWriter but consults policy on semantic errors.
-//
-//   - nil policy: identical to TeeWriter
-//   - non-nil: PolicyRetry yields and retries writing remaining bytes for either
-//     the primary or tee writes. Short writes are reported as io.ErrShortWrite.
+// TeeWriterPolicy is [TeeWriter] with a policy for exact semantic signals.
+// On [PolicyRetry] it yields and resumes the interrupted write with its
+// remaining bytes. An empty write reaches primary and can also be retried.
+// A nil policy uses TeeWriter.
 func TeeWriterPolicy(primary Writer, tee Writer, policy SemanticPolicy) Writer {
 	if policy == nil {
 		return TeeWriter(primary, tee)
@@ -201,7 +180,7 @@ func (t teeWriterWithPolicy) Write(p []byte) (int, error) {
 	// Primary write with retry per policy. As progress is accepted by primary,
 	// mirror the accepted prefix to tee.
 	off := 0
-	for off < len(p) {
+	for {
 		nw, ew := t.w.Write(p[off:])
 		if nw > 0 {
 			// Mirror the newly accepted bytes to tee.
@@ -236,27 +215,30 @@ func (t teeWriterWithPolicy) Write(p []byte) (int, error) {
 			off += nw
 		}
 		if ew != nil {
-			if ew == ErrWouldBlock {
-				if t.p.OnWouldBlock(OpTeeWriterPrimaryWrite) == PolicyRetry {
-					t.p.Yield(OpTeeWriterPrimaryWrite)
-					continue
+			switch ew {
+			case ErrWouldBlock:
+				if t.p.OnWouldBlock(OpTeeWriterPrimaryWrite) != PolicyRetry {
+					return off, ew
 				}
+			case ErrMore:
+				if t.p.OnMore(OpTeeWriterPrimaryWrite) != PolicyRetry {
+					return off, ew
+				}
+			default:
 				return off, ew
 			}
-			if ew == ErrMore {
-				if t.p.OnMore(OpTeeWriterPrimaryWrite) == PolicyRetry {
-					t.p.Yield(OpTeeWriterPrimaryWrite)
-					continue
-				}
-				return off, ew
+			t.p.Yield(OpTeeWriterPrimaryWrite)
+			if nw == 0 {
+				continue
 			}
-			return off, ew
+		}
+		if off == len(p) {
+			return off, nil
 		}
 		if nw == 0 {
 			return off, io.ErrShortWrite
 		}
 	}
-	return off, nil
 }
 
 // WriterToAdapter adapts a Reader to implement WriterTo using iox.Copy.

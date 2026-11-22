@@ -1,112 +1,91 @@
 # iox
 
-Go `io` パッケージ向けのノンブロッキングセマンティクス：would-block と multi-shot を第一級のシグナルとして扱います。
-
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/iox.svg)](https://pkg.go.dev/code.hybscloud.com/iox)
-[![Go Report Card](https://goreportcard.com/badge/github.com/hayabusa-cloud/iox)](https://goreportcard.com/report/github.com/hayabusa-cloud/iox)
-[![codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
+[![Benchmarks](https://github.com/hayabusa-cloud/iox/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/hayabusa-cloud/iox/actions/workflows/benchmarks.yml)
+[![Codecov](https://codecov.io/gh/hayabusa-cloud/iox/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/iox)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+Go `io` パッケージ向けのノンブロッキングセマンティクス：would-block と multi-shot を第一級のシグナルとして扱います。
 
 言語: [English](./README.md) | [简体中文](./README.zh-CN.md) | [Español](./README.es.md) | **日本語** | [Français](./README.fr.md)
 
 ## 概要
 
-`iox` はノンブロッキング I/O スタック向けです。そこでは「今は進捗がない」と「今は進捗があるが、操作はまだアクティブ」が**通常の制御フロー**であり、失敗ではありません。
+`iox` はノンブロッキング I/O スタック向けのパッケージです。「I/O の準備完了を待ってから再試行する」（`ErrWouldBlock`）と「同じ操作の観測を続ける」（`ErrMore`）を通常の制御フローとして扱います。
 
-明確な契約を持つ 2 つのセマンティックエラーを導入します。
+コピーや分岐（tee）用の関数は、Go 標準の `io.Reader` と `io.Writer` インターフェースを使います。おなじみの戻り値 `(n, err)` では、`n` は転送済みのバイト数を表し、`err` は呼び出し側の次の動作を示します。どちらのシグナルでも `n` はゼロまたは正の値を取るので、まず `n` バイト分の進捗を反映します。
 
-- `ErrWouldBlock` — **今は進めない**（ready 状態または完了を待つ必要がある）。直ちに返し、次のポーリング後に再試行します。
-- `ErrMore` — **進捗があった**うえで操作がアクティブのままです。**後続の完了が続きます**。現在の結果を処理し、ポーリングを継続します。
+## I/O の結果
 
-`iox` は標準 `io` の考え方を保ちます。
+| エラー | `Classify` の結果 | 呼び出し側の処理 |
+|---|---|---|
+| `nil` | `OutcomeOK` | 転送を続けるか終了する |
+| `ErrWouldBlock` | `OutcomeWouldBlock` | I/O の準備完了を待って再試行する |
+| `ErrMore` | `OutcomeMore` | 操作を維持し、次の完了を受け取る |
+| その他のエラー | `OutcomeFailure` | 転送済みのバイト数を考慮してエラーを処理する |
 
-- 返る count は常に「転送したバイト数 / 進捗」を意味します
-- 返る error が制御フローを決めます（`nil`、失敗ではないセマンティックシグナル、または実際の失敗）
-- ヘルパーは `io.Reader` / `io.Writer` と互換で、`io.WriterTo` / `io.ReaderFrom` による高速パスを最適化します
+`Read` を直接呼び出した場合、`io.EOF` は入力の終端を示します。最後に返されたバイトを処理してから読み取りを終了します。`io.EOF` を `Classify` に渡すと `OutcomeFailure` が返ります。
 
-## セマンティクス契約
+## インストールと使用例
 
-`iox` セマンティクスを採用する操作では:
-
-| 返る error        | 意味                | 呼び出し側が次にやるべきこと                  |
-|-----------------|-------------------|---------------------------------|
-| `nil`           | この呼び出し/転送は成功として完了 | 状態マシンを進める                       |
-| `ErrWouldBlock` | 今は進めない            | いったん止める; ready 状態または完了を待つ; 再試行  |
-| `ErrMore`       | 進捗があった; まだ完了が続く   | いま処理する; 操作をアクティブなまま維持; ポーリングを継続 |
-| その他の error      | 失敗                | 適切に処理/ログ/クローズ/バックオフ             |
-
-返る error を解釈する前に、必ず返る count を先に処理してください。count はすでに発生した進捗を表し、error は次の制御アクションを選択します。
-
-補足:
-- `iox.Copy` は「部分的に進捗した後に停止した」または「multi-shot の継続を交付する」ことを示すために、`(written > 0, ErrWouldBlock)` や `(written > 0, ErrMore)` を返すことがあります。
-- `(0, nil)` の Read は「いまはコピーを止める」として扱い、ヘルパー内に隠れたスピンを作らないために `(written, nil)` を返します。
-- `CopyN`、`CopyNBuffer`、およびそれらのポリシー付きバリアントは「ちょうど n バイトをコピーする」有界操作です。`written == n` になった時点で `nil` を返します。サブスクリプションや multi-shot ルートのライフサイクル API ではありません。
-- `Outcome` の数値は防御的なエンコードであり、セマンティックな順序ではありません。`<`、`>`、`min`、`max` ではなく、`switch`、`Classify`、述語を使ってください。
-
-### 注意: `iox.Copy` と `(0, nil)` の Read
-
-Go の `io.Reader` 約束では、`Read` が `(0, nil)` を返して「進捗なし」を表すことが許されています（EOF ではありません）。良い Reader は `len(p) == 0` の場合を除き、`(0, nil)` を避けるべきです。
-
-`iox.Copy` は `(0, nil)` を「いまはコピーを止める」と解釈し、`(written, nil)` を返します。これは、ノンブロッキングまたはイベントループのコードでヘルパー内部にスピンを隠さないためです。繰り返しの `(0, nil)` に対して厳密な前進検出が必要なら、その方針は呼び出し側で実装してください。
-
-### 注意: `iox.Copy` と部分書き込みリカバリ
-
-ノンブロッキングな宛先へコピーする際、`dst.Write` がセマンティックエラー（`ErrWouldBlock` または `ErrMore`）を部分書き込み（`nw < nr`）とともに返すことがあります。この場合、バイトは `src` から読み取られましたが、`dst` へ完全には書き込まれていません。
-
-データ損失を防ぐため、`iox.Copy` はソースポインタのロールバックを試みます：
-- `src` が `io.Seeker` を実装している場合、Copy は `Seek(nw-nr, io.SeekCurrent)` を呼び出して未書き込みバイトを巻き戻します。
-- `src` が `io.Seeker` を実装して**いない**場合、Copy は `ErrNoSeeker` を返し、未書き込みバイトが回復不能であることを示します。
-
-このロールバック保証は、`iox.Copy` が所有する通常の読み書きループに適用されます。標準の `io.WriterTo` または `io.ReaderFrom` 高速パスが選択された場合、その高速パス実装がソース位置の進行と部分書き込みの回復を所有します。実装は `ErrWouldBlock` / `ErrMore` を保持し、戻り値の count で未転送とされたバイトを後続の再試行で安全に扱えるようにしなければなりません。
-
-**推奨事項：**
-- ノンブロッキングな宛先へコピーする際は、シーク可能なソース（例: `*os.File`、`*bytes.Reader`）を使用してください。
-- シーク不可能なソース（例: ネットワークソケット）の場合、書き込み側のセマンティックエラーに対して `PolicyRetry` を設定した `CopyPolicy` を使用してください。これにより、すべての読み取りバイトが返却前に書き込まれることが保証され、ロールバックの必要がなくなります。
-
-## クイックスタート
-
-`go get` でインストール:
+このモジュールには Go 1.27 以降が必要です。
 
 ```shell
 go get code.hybscloud.com/iox
 ```
 
-```go
-type reader struct{ step int }
+2 回目の `Copy` は `"world"` を転送した後、`ErrWouldBlock` を返します。呼び出し側は `CopyN` でこの 5 バイトを消費してから、自身の `waitReadable` 関数で再び読み取り可能になるまで待ちます。[読み取りの再試行例](examples/wouldblock.go)
 
-func (r *reader) Read(p []byte) (int, error) {
-	switch r.step {
-	case 0:
-		r.step++
-		return copy(p, "hello"), iox.ErrMore
-	case 1:
-		r.step++
-		return copy(p, "world"), nil
-	case 2:
-		r.step++
-		return 0, iox.ErrWouldBlock
-	case 3:
-		r.step++
-		return copy(p, "iox"), nil
-	default:
-		return 0, io.EOF
-	}
+```go
+src := &reader{
+	{data: "hello", err: iox.ErrMore},
+	{data: "world"},
+	{err: iox.ErrWouldBlock},
+	{data: "iox"},
+}
+var dst bytes.Buffer
+
+n, err := iox.Copy(&dst, src)
+fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: expect more "hello"
+_, _ = iox.CopyN(io.Discard, &dst, n)
+
+if iox.Classify(err) == iox.OutcomeMore {
+	n, err = iox.Copy(&dst, src)
+	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 5 io: would block "world"
+	_, _ = iox.CopyN(io.Discard, &dst, n)
 }
 
-func main() {
-	src := &reader{}
-	var dst bytes.Buffer
-
-	n, err := iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=5  err=io: expect more  buf="hello"
-	_, _ = iox.CopyN(io.Discard, &dst, 5)                    // "hello" を消費
-
+if iox.Classify(err) == iox.OutcomeWouldBlock {
+	waitReadable()
 	n, err = iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=5  err=io: would block   buf="world"
-	_, _ = iox.CopyN(io.Discard, &dst, 5)                    // "world" を消費
+	fmt.Printf("%d %v %q\n", n, err, dst.String()) // 3 <nil> "iox"
+}
+return err
+```
 
-	n, err = iox.Copy(&dst, src)
-	fmt.Printf("n=%d err=%v buf=%q\n", n, err, dst.String()) // n=3  err=<nil>            buf="iox"
+`p` に収まらなかったデータは次の `Read` に持ち越します。長さが 0 のバッファを渡すと、読み取り位置は進みません。エラーはチャンクの最後のバイトと一緒に返し、空のチャンクではエラーだけを返します。
+
+```go
+type reader []struct {
+	data string
+	err  error
+}
+
+func (r *reader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if len(*r) == 0 {
+		return 0, io.EOF
+	}
+	chunk := &(*r)[0]
+	n := copy(p, chunk.data)
+	if n < len(chunk.data) {
+		chunk.data = chunk.data[n:]
+		return n, nil
+	}
+	*r = (*r)[1:]
+	return n, chunk.err
 }
 ```
 
@@ -124,10 +103,10 @@ for {
 	switch {
 	case err == nil:
 		return nil
-	case iox.IsMore(err):
-		continue
 	case iox.IsWouldBlock(err):
 		wait()
+		continue
+	case iox.IsMore(err):
 		continue
 	default:
 		return err
@@ -145,10 +124,12 @@ for {
   - `CopyBuffer(dst Writer, src Reader, buf []byte) (int64, error)`
   - `CopyN(dst Writer, src Reader, n int64) (int64, error)`
   - `CopyNBuffer(dst Writer, src Reader, n int64, buf []byte) (int64, error)`
+  - `CopyPolicy`、`CopyBufferPolicy`、`CopyNPolicy`、`CopyNBufferPolicy` は最後の引数に `SemanticPolicy` を取ります。
 
 - Tee
   - `TeeReader(r Reader, w Writer) Reader`
   - `TeeWriter(primary, tee Writer) Writer`
+  - `TeeReaderPolicy` と `TeeWriterPolicy` も最後の引数に `SemanticPolicy` を取ります。
 
 - アダプター
   - `AsWriterTo(r Reader) Reader`（`iox.Copy` により `io.WriterTo` を追加）
@@ -168,9 +149,17 @@ for {
   - `Backoff` — 外部 I/O 待機のための適応型バックオフ
   - `DefaultBackoffBase` (500µs)、`DefaultBackoffMax` (100ms)
 
+## 再開可能な I/O
+
+`Step.Next` は値、エラー、`Wait` を返します。`Wait` がゼロ値なら、そのステップは完了しています。`Finish` は完了時の結果を返すステップを作ります。`Await` には、指定した型の値を待つ条件と、その値から次のステップを返す継続を渡します。
+
+`Wait.Arm` には、実行側のキューに処理を追加する関数を渡します。`Arm` が戻る前にシグナルが届くこともあります。最初に受理された `Signal.Deliver` が `Ready` を 1 件キューに入れます。ワーカーは `TryResume` で一度だけその処理を引き受け、継続を実行できます。`Deliver` が `false` を返した場合、値は引き続き送信元が所有します。 [型付きの値を受け取る例](example_await_test.go)
+
+`WriteStep` は各書き込みのバイト数とエラーを記録します。先頭の一部だけが受理されて `ErrWouldBlock` が返ると、通知を受けた後で残りを同じ書き込み先に 1 回書き込めます。全バイトが受理された場合は、`ErrWouldBlock` を含め、返されたエラーをそのまま結果として終了します。処理が完了するか待機の取り消しに成功するまで、バッファを有効なまま保持し、変更しないでください。
+
 ## Backoff — 外部 I/O のための適応型待機
 
-`ErrWouldBlock` が進捗不可を示した場合、呼び出し側は再試行前に待機する必要があります。`iox.Backoff` はこの待機のための適応型バックオフ戦略を提供します。
+準備完了通知を利用できる場合は、`ErrWouldBlock` を受け取ったらその通知を待ちます。通知がない場合は、`iox.Backoff.Wait` で呼び出し元の goroutine を休止させてから再試行できます。
 
 **三層進捗モデル：**
 
@@ -183,33 +172,32 @@ for {
 **ゼロ値のまますぐ使用可能：**
 
 ```go
-var b iox.Backoff  // DefaultBackoffBase (500µs) と DefaultBackoffMax (100ms) を使用
+var b iox.Backoff // DefaultBackoffBase (500µs) と DefaultBackoffMax (100ms) を使用
 
 for {
 	n, err := conn.Read(buf)
+	if n > 0 {
+		process(buf[:n])
+		b.Reset() // 進捗成功後にリセット
+	}
 	if iox.IsWouldBlock(err) {
 		b.Wait() // ジッター付きの適応型待機
 		continue
 	}
-	if err != nil {
+	if err != nil || n == 0 {
 		return err
 	}
-	process(buf[:n])
-	b.Reset() // 進捗成功後にリセット
 }
 ```
 
-**アルゴリズム：** ブロックベースの線形スケーリング、±12.5% のジッター付き（待機の集中を防止）。
+読み取ったバイトを先に処理します。エラーが `ErrWouldBlock` に一致すれば、`ErrMore` にも一致する場合を含め、待機してから再試行します。それ以外のエラーはそのまま返します。読み取りが `(0, nil)` を返すと呼び出し側に制御を戻します。この結果は入力の終端に達する前にも起こり得ます。
 
-- ブロック 1: `base` 時間の待機 1 回
-- ブロック 2: `2×base` 時間の待機 2 回
-- ブロック n: `min(n×base, max)` 時間の待機 n 回
+ブロック `n` では、`n` 回の再試行に同じ基準時間 `min(n × base, max)` を使います。`Duration()` はこの基準時間を返します。各回の間隔は基準時間から最大 12.5% 変動し、`max` を超えることがあります。
 
-**メソッド：**
-
-- `Wait()` — 現在の時間だけ待機し、次へ進む
-- `Reset()` — ブロック 1 に戻す
-- `SetBase(d)` / `SetMax(d)` — タイミング設定
+- `NextDelay()` はスケジュールを 1 回進め、再試行タイマーに設定する間隔を返します。
+- `Wait()` は `NextDelay()` を呼び、その間隔だけ呼び出し元のゴルーチンを休止します。
+- `Reset()` は基準時間と上限の設定を保ったままブロック 1 に戻します。
+- `SetBase(d)` と `SetMax(d)` は正の時間を受け取り、現在のブロックを維持します。
 
 ## Tee のセマンティクス（count と error）
 
@@ -222,28 +210,48 @@ for {
 
 一部のヘルパーはオプションで `SemanticPolicy` を受け取り、`ErrWouldBlock` や `ErrMore` に遭遇したときにどう振る舞うか（例: すぐ返すか、いったん制御を譲って再試行するか）を決めます。
 
-デフォルトは `nil` です。つまり**非ブロッキングの挙動は保持されます**。ヘルパーは `ErrWouldBlock` / `ErrMore` を呼び出し側へ返し、自身では待機や再試行を行いません。
+デフォルトの `nil` ポリシーでは、呼び出し側が待機と再試行を担います。`n > 0` のとき、`CopyNPolicy` と `CopyNBufferPolicy` は書き込み先が合計 `n` バイトを受け取った時点で `(n, nil)` を返します。最後のバイトとともに返されたシグナルについては、ポリシーのコールバックを呼びません。
 
 ## 分類と厳密なセンチネルディスパッチ
 
 分類ヘルパー（`IsMore`、`IsWouldBlock`、`IsSemantic`、`IsNonFailure`、`IsFailure`、`Classify`）は `errors.Is` を使うため、ラップされたセマンティックセンチネルも API 境界や診断では正しく分類されます。`iox` のセマンティック制御結果を分類するときは、直接の `errors.Is` 呼び出しよりもこれらのヘルパーを優先してください。
 
-内部の copy / tee 高速パスはポリシー判断をセンチネルの厳密な同一性でディスパッチします。制御下にあるプロデューサーは、そのパスでは `ErrMore` と `ErrWouldBlock` をラップせずに返してください。ラップされたセマンティックエラーはそのまま返され、分類も可能ですが、厳密なセンチネルに基づくポリシー再試行は起動しません。
+`IsProgress` は `Classify` が `OutcomeOK` または `OutcomeMore` を選ぶ場合にのみ true を返します。同じ error が両方のセマンティックセンチネルに一致する場合は `ErrWouldBlock` が優先され、`IsProgress` は false になります。`IsMore` と `IsWouldBlock` はそれぞれのセンチネルへの一致を調べるため、両方が true になることがあります。これらの述語はバイト数の進捗を測りません。返された count は常に別途処理してください。
+
+コピーや tee のヘルパーがポリシーに判断を委ねるのは、`ErrMore` または `ErrWouldBlock` を直接受け取った場合だけです。ポリシーで処理したいときは、これらのセンチネルをラップせずに返してください。
 
 ## 高速パスとセマンティクス保持
 
-`iox.Copy` は利用可能な場合、標準 `io` の高速パスを使います:
+`Copy` はまず読み取り元の `io.WriterTo` を調べ、次に書き込み先の `io.ReaderFrom` を調べます。汎用ループは指定されたバッファを使い、省略時には 32 KiB のバッファを使います。`CopyN` は読み取り量を残りのバイト数に制限します。書き込み先の `ReadFrom` は使えますが、元の読み取り元の `WriteTo` は呼び出しません。
 
-- `src` が `io.WriterTo` を実装していれば `WriteTo` を呼びます
-- そうでなければ `dst` が `io.ReaderFrom` を実装していれば `ReadFrom` を呼びます
-- それ以外は内部の固定サイズバッファ（`32KiB`）と read/write ループを使います
-
-高速パスで `ErrWouldBlock` / `ErrMore` を保持するため、`WriteTo` / `ReadFrom` の実装が適切な場面でそれらを返すようにしてください。高速パスは自身の進捗カウントも正確に保つ必要があります。返す count は実際に転送されたバイト数であり、残りのバイトは後続の再試行で利用可能であるか、実際の終端エラーとして表現されなければなりません。
+委譲先のメソッドは、転送したバイト数の合計とエラーを返します。ポリシーでシグナルを処理するには、`ErrWouldBlock` または `ErrMore` をそのまま返します。再試行に対応するメソッドは、未書き込みのバイトを保持する必要があります。`YieldOnWriteWouldBlockPolicy` は、読み取り時に発生したシグナルでも、どちらかのメソッドが `ErrWouldBlock` を返せば再試行します。
 
 通常の `io.Reader`/`io.Writer` しか持っていないが、高速パスインターフェースも提供したい、かつセマンティクスも保持したい場合は次を使います:
 
 - `iox.AsWriterTo(r)` により `iox.Copy` 実装の `WriteTo` を追加
 - `iox.AsReaderFrom(w)` により `iox.Copy` 実装の `ReadFrom` を追加
+
+### 空読みとバイト数を指定したコピー
+
+汎用の読み書きループでは、読み取りが `(0, nil)` を返すと `Copy` は停止して `(written, nil)` を返します。入力の終端に達する前でも、この結果は起こり得ます。`WriteTo` や `ReadFrom` に委譲した場合、読み取りは委譲先が制御します。
+
+`n` が正の場合、`CopyN` とその派生関数は、書き込み先が合計 `n` バイトを受け取った時点で `(n, nil)` を返します。それより早く EOF に達した場合や、コピーが `nil` で終了してもバイト数が不足している場合は `io.ErrUnexpectedEOF` を返します。指定量のコピーが完了した後も、元のマルチショット操作は継続できます。
+
+### 部分書き込み
+
+汎用ループが部分書き込みでセマンティックエラーを返す際は、`seeker.Seek(int64(nw-nr), io.SeekCurrent)` で未書き込み部分の先頭まで戻ります。`nr` は読み取ったバイト数、`nw` は書き込み先が受け取ったバイト数です。`Seek` が失敗した場合はそのエラーを優先し、読み取り元が `io.Seeker` を実装していなければ `ErrNoSeeker` を返します。
+
+`CopyPolicy` で書き込みが `ErrWouldBlock` または `ErrMore` を直接返し、ポリシーが `PolicyRetry` を選ぶと、未書き込みのバイトを保持して再試行します。シークできない読み取り元でも使えます。`WriteTo` や `ReadFrom` に委譲した場合は、委譲先が読み取り位置と再試行を管理します。
+
+## ベンチマーク
+
+`BenchmarkCopyBufferReuse` は `iox.CopyBuffer`、`ReturnPolicy` を指定した `iox.CopyBufferPolicy`、`io.CopyBuffer` の汎用読み書きループを比較します。各ケースでは 32 KiB のバッファを再利用し、メモリ上の同じ入力を EOF までコピーします。
+
+```shell
+go test -run '^$' -bench '^BenchmarkCopyBufferReuse$' -benchmem -benchtime=200ms -count=10 -cpu=1 -timeout=120s .
+```
+
+両方のリビジョンを同じマシン、同じ Go バージョン、同程度の負荷で測定し、入力サイズごとに `ns/op` と `allocs/op` を比較します。ウェイクアップ遅延の測定には、実際に I/O の準備完了を待つワークロードを使用してください。
 
 ## ライセンス
 
