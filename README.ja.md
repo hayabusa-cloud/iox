@@ -243,6 +243,16 @@ for {
 
 `CopyPolicy` で書き込みが `ErrWouldBlock` または `ErrMore` を直接返し、ポリシーが `PolicyRetry` を選ぶと、未書き込みのバイトを保持して再試行します。シークできない読み取り元でも使えます。`WriteTo` や `ReadFrom` に委譲した場合は、委譲先が読み取り位置と再試行を管理します。
 
+## ベンチマーク
+
+`BenchmarkCopyBufferReuse` は `iox.CopyBuffer`、`ReturnPolicy` を指定した `iox.CopyBufferPolicy`、`io.CopyBuffer` の汎用読み書きループを比較します。各ケースでは 32 KiB のバッファを再利用し、メモリ上の同じ入力を EOF までコピーします。
+
+```shell
+go test -run '^$' -bench '^BenchmarkCopyBufferReuse$' -benchmem -benchtime=200ms -count=10 -cpu=1 -timeout=120s .
+```
+
+両方のリビジョンを同じマシン、同じ Go バージョン、同程度の負荷で測定し、入力サイズごとに `ns/op` と `allocs/op` を比較します。ウェイクアップ遅延の測定には、実際に I/O の準備完了を待つワークロードを使用してください。
+
 ## ライセンス
 
 MIT — [LICENSE](./LICENSE) を参照。

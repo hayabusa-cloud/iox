@@ -243,6 +243,16 @@ for {
 
 使用 `CopyPolicy` 时，如果写入直接返回 `ErrWouldBlock` 或 `ErrMore`，且策略选择 `PolicyRetry`，通用循环会保留尚未写入的字节以供重试。源端不能回退时也可以这样做。委托给 `WriteTo` 或 `ReadFrom` 时，由受委托的方法管理源端位置和恢复。
 
+## 基准测试
+
+`BenchmarkCopyBufferReuse` 比较 `iox.CopyBuffer`、使用 `ReturnPolicy` 的 `iox.CopyBufferPolicy` 和 `io.CopyBuffer` 的通用读写路径。每个用例都复用 32 KiB 的缓冲区，复制相同的内存数据直到 EOF。
+
+```shell
+go test -run '^$' -bench '^BenchmarkCopyBufferReuse$' -benchmem -benchtime=200ms -count=10 -cpu=1 -timeout=120s .
+```
+
+在同一台机器上使用相同的 Go 版本，在相近负载下分别测试两个版本。按相同的输入大小比较 `ns/op` 和 `allocs/op`。要测量唤醒延迟，请使用实际等待 I/O 就绪的负载。
+
 ## 许可证
 
 MIT — 见 [LICENSE](./LICENSE)。

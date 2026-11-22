@@ -243,6 +243,16 @@ When the generic loop returns a semantic write error after a short write, it rew
 
 With `CopyPolicy`, `PolicyRetry` retains that suffix across retries of an exact `ErrWouldBlock` or `ErrMore`, including on non-seekable sources. A delegated `WriteTo` or `ReadFrom` owns its own source position and recovery.
 
+## Benchmarks
+
+`BenchmarkCopyBufferReuse` compares `iox.CopyBuffer`, `iox.CopyBufferPolicy` with `ReturnPolicy`, and `io.CopyBuffer` on the generic read/write path. Each case reuses a 32 KiB buffer to copy the same in-memory input until EOF.
+
+```shell
+go test -run '^$' -bench '^BenchmarkCopyBufferReuse$' -benchmem -benchtime=200ms -count=10 -cpu=1 -timeout=120s .
+```
+
+Run both revisions on the same machine with the same Go version and similar load. Compare `ns/op` and `allocs/op` for matching input sizes. To measure wake-up latency, use a workload that waits for I/O readiness.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

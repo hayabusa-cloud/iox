@@ -243,6 +243,16 @@ Si el bucle genérico devuelve un error semántico tras una escritura parcial, r
 
 Con `CopyPolicy`, `PolicyRetry` conserva los bytes pendientes para reintentar una escritura que devuelve directamente `ErrWouldBlock` o `ErrMore`, incluso si el origen no permite reposicionarse. Si se delega en `WriteTo` o `ReadFrom`, ese método gestiona la posición del origen y la recuperación.
 
+## Pruebas de rendimiento
+
+`BenchmarkCopyBufferReuse` compara `iox.CopyBuffer`, `iox.CopyBufferPolicy` con `ReturnPolicy` e `io.CopyBuffer` en el bucle genérico de lectura y escritura. Cada caso reutiliza un búfer de 32 KiB para copiar los mismos datos en memoria hasta EOF.
+
+```shell
+go test -run '^$' -bench '^BenchmarkCopyBufferReuse$' -benchmem -benchtime=200ms -count=10 -cpu=1 -timeout=120s .
+```
+
+Ejecuta la prueba para ambas revisiones en la misma máquina, con la misma versión de Go y una carga similar. Compara `ns/op` y `allocs/op` para entradas del mismo tamaño. Para medir la latencia de reactivación, usa una carga de trabajo que espere a que la E/S esté lista.
+
 ## Licencia
 
 MIT — ver [LICENSE](./LICENSE).

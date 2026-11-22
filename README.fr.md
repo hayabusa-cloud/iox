@@ -243,6 +243,16 @@ Lorsque la boucle générique renvoie une erreur sémantique après une écritur
 
 Avec `CopyPolicy`, `PolicyRetry` conserve les octets en attente lorsqu’une écriture renvoie directement `ErrWouldBlock` ou `ErrMore`, même si la source ne permet pas de revenir en arrière. Une méthode déléguée `WriteTo` ou `ReadFrom` gère elle-même la position de la source et la reprise.
 
+## Mesures de performance
+
+`BenchmarkCopyBufferReuse` compare `iox.CopyBuffer`, `iox.CopyBufferPolicy` avec `ReturnPolicy` et `io.CopyBuffer` dans la boucle générique de lecture et d’écriture. Chaque cas réutilise un tampon de 32 Kio pour copier les mêmes données en mémoire jusqu’à EOF.
+
+```shell
+go test -run '^$' -bench '^BenchmarkCopyBufferReuse$' -benchmem -benchtime=200ms -count=10 -cpu=1 -timeout=120s .
+```
+
+Testez les deux révisions sur la même machine, avec la même version de Go et une charge comparable. Comparez `ns/op` et `allocs/op` à taille d’entrée égale. Pour mesurer la latence de réveil, utilisez une charge de travail qui attend que l’E/S soit prête.
+
 ## Licence
 
 MIT — voir [LICENSE](./LICENSE).
